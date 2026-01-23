@@ -36,7 +36,7 @@ if (!SOURCE_IMAGE) {
 const ICON_SIZES = {
   'icon.png': 1024, // Main app icon (iOS/Android)
   'android-icon-foreground.png': 1024, // Android adaptive icon foreground
-  'android-icon-background.jpg': 1024, // Android adaptive icon background (can be solid color)
+  'android-icon-background.png': 1024, // Android adaptive icon background (can be solid color)
   'android-icon-monochrome.png': 1024, // Android monochrome icon
   'splash-icon.png': 200, // Splash screen icon (width, will maintain aspect ratio)
   'favicon.png': 48, // Web favicon
@@ -107,8 +107,8 @@ async function generateIcons() {
         background: { r: 230, g: 244, b: 254 } // Light blue matching app.json
       }
     })
-      .jpeg({ quality: 100 })
-      .toFile(path.join(OUTPUT_DIR, 'android-icon-background.jpg'));
+      .png()
+      .toFile(path.join(OUTPUT_DIR, 'android-icon-background.png'));
 
     // Generate Android monochrome icon (1024x1024)
     console.log('🤖 Generating Android monochrome icon...');
