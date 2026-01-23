@@ -85,8 +85,28 @@ const styles = StyleSheet.create({
   deleteButton: {
     padding: 4,
   },
+  repliesSection: {
+    marginTop: 8,
+  },
+  replyCountButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+    paddingVertical: 4,
+  },
+  replyCountLine: {
+    width: 2,
+    height: 20,
+    backgroundColor: COLORS.border,
+    marginRight: 8,
+  },
+  replyCountText: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    fontWeight: "500",
+  },
   repliesContainer: {
-    marginTop: 12,
+    marginTop: 8,
     marginLeft: 12,
     paddingLeft: 12,
     borderLeftWidth: 2,
@@ -151,12 +171,31 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   inputContainer: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    padding: 16,
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
     backgroundColor: COLORS.cardBackground,
+  },
+  replyingToIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+    gap: 8,
+  },
+  cancelReplyButton: {
+    padding: 4,
+  },
+  replyingToText: {
+    fontSize: 12,
+    color: COLORS.primary,
+    fontWeight: "500",
+    flex: 1,
+  },
+  inputRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    padding: 16,
     gap: 8,
   },
   inputAvatar: {

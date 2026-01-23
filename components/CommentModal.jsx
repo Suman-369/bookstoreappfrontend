@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Modal,
   View,
@@ -15,7 +15,7 @@ import { Image } from "expo-image";
 import { useAuthStore } from "../store/authStore";
 import { API_URL } from "../constants/api";
 import COLORS from "../constants/colors";
-import { formatPublishDate } from "../lib/utils";
+import { formatPublishDate } from "../dist/_expo/lib/utils";
 import styles from "../assets/styles/commentModal.styles";
 
 export default function CommentModal({ visible, onClose, bookId, onCommentAdded }) {
@@ -24,8 +24,9 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
   const [loading, setLoading] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [replyingTo, setReplyingTo] = useState(null);
-  const [replyText, setReplyText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [expandedReplies, setExpandedReplies] = useState({});
+  const inputRef = useRef(null);
 
   useEffect(() => {
     if (visible && bookId) {
@@ -52,8 +53,7 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
   };
 
   const handleAddComment = async (parentCommentId = null) => {
-    const text = parentCommentId ? replyText : commentText;
-    if (!text.trim()) return;
+    if (!commentText.trim()) return;
 
     setSubmitting(true);
     try {
@@ -64,18 +64,19 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          text,
+          text: commentText.trim(),
           parentCommentId: parentCommentId || undefined,
         }),
       });
 
       if (!response.ok) throw new Error("Failed to add comment");
 
+      setCommentText("");
+      setReplyingTo(null);
+      
+      // If it's a reply, expand the replies section
       if (parentCommentId) {
-        setReplyText("");
-        setReplyingTo(null);
-      } else {
-        setCommentText("");
+        setExpandedReplies(prev => ({ ...prev, [parentCommentId]: true }));
       }
 
       await fetchComments();
@@ -88,6 +89,27 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleReplyClick = (commentId) => {
+    setReplyingTo(commentId);
+    // Focus the input after a short delay to ensure it's rendered
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 100);
+  };
+
+  const handleCancelReply = () => {
+    setReplyingTo(null);
+    setCommentText("");
+    inputRef.current?.blur();
+  };
+
+  const toggleReplies = (commentId) => {
+    setExpandedReplies(prev => ({
+      ...prev,
+      [commentId]: !prev[commentId]
+    }));
   };
 
   const handleDeleteComment = async (commentId) => {
@@ -128,7 +150,7 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
         <Text style={styles.commentText}>{item.text}</Text>
         <View style={styles.commentActions}>
           <TouchableOpacity
-            onPress={() => setReplyingTo(replyingTo === item._id ? null : item._id)}
+            onPress={() => handleReplyClick(item._id)}
             style={styles.replyButton}
           >
             <Ionicons name="chatbubble-outline" size={14} color={COLORS.primary} />
@@ -144,68 +166,46 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
           )}
         </View>
 
-        {/* Reply Input */}
-        {replyingTo === item._id && (
-          <View style={styles.replyInputContainer}>
-            <TextInput
-              style={styles.replyInput}
-              placeholder="Write a reply..."
-              placeholderTextColor={COLORS.placeholderText}
-              value={replyText}
-              onChangeText={setReplyText}
-              multiline
-            />
-            <View style={styles.replyActions}>
-              <TouchableOpacity
-                onPress={() => {
-                  setReplyingTo(null);
-                  setReplyText("");
-                }}
-                style={styles.cancelButton}
-              >
-                <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => handleAddComment(item._id)}
-                style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
-                disabled={submitting || !replyText.trim()}
-              >
-                {submitting ? (
-                  <ActivityIndicator size="small" color={COLORS.white} />
-                ) : (
-                  <Text style={styles.submitText}>Reply</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* Replies */}
+        {/* Reply Count and Expandable Replies */}
         {item.replies && item.replies.length > 0 && (
-          <View style={styles.repliesContainer}>
-            {item.replies.map((reply) => (
-              <View key={reply._id} style={styles.replyItem}>
-                <Image
-                  source={{ uri: reply.user?.profileImg || "https://via.placeholder.com/32" }}
-                  style={styles.replyAvatar}
-                />
-                <View style={styles.replyContent}>
-                  <View style={styles.commentHeader}>
-                    <Text style={styles.commentUsername}>{reply.user?.username || "User"}</Text>
-                    <Text style={styles.commentDate}>{formatPublishDate(reply.createdAt)}</Text>
+          <View style={styles.repliesSection}>
+            <TouchableOpacity
+              onPress={() => toggleReplies(item._id)}
+              style={styles.replyCountButton}
+            >
+              <View style={styles.replyCountLine} />
+              <Text style={styles.replyCountText}>
+                {expandedReplies[item._id] ? "Hide" : "View"} {item.replies.length} {item.replies.length === 1 ? "reply" : "replies"}
+              </Text>
+            </TouchableOpacity>
+            
+            {expandedReplies[item._id] && (
+              <View style={styles.repliesContainer}>
+                {item.replies.map((reply) => (
+                  <View key={reply._id} style={styles.replyItem}>
+                    <Image
+                      source={{ uri: reply.user?.profileImg || "https://via.placeholder.com/32" }}
+                      style={styles.replyAvatar}
+                    />
+                    <View style={styles.replyContent}>
+                      <View style={styles.commentHeader}>
+                        <Text style={styles.commentUsername}>{reply.user?.username || "User"}</Text>
+                        <Text style={styles.commentDate}>{formatPublishDate(reply.createdAt)}</Text>
+                      </View>
+                      <Text style={styles.commentText}>{reply.text}</Text>
+                      {reply.user?._id === user?._id && (
+                        <TouchableOpacity
+                          onPress={() => handleDeleteComment(reply._id)}
+                          style={styles.deleteButton}
+                        >
+                          <Ionicons name="trash-outline" size={12} color="#e74c3c" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   </View>
-                  <Text style={styles.commentText}>{reply.text}</Text>
-                  {reply.user?._id === user?._id && (
-                    <TouchableOpacity
-                      onPress={() => handleDeleteComment(reply._id)}
-                      style={styles.deleteButton}
-                    >
-                      <Ionicons name="trash-outline" size={12} color="#e74c3c" />
-                    </TouchableOpacity>
-                  )}
-                </View>
+                ))}
               </View>
-            ))}
+            )}
           </View>
         )}
       </View>
@@ -251,29 +251,45 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
         )}
 
         <View style={styles.inputContainer}>
-          <Image
-            source={{ uri: user?.profileImg || "https://via.placeholder.com/32" }}
-            style={styles.inputAvatar}
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Write a comment..."
-            placeholderTextColor={COLORS.placeholderText}
-            value={commentText}
-            onChangeText={setCommentText}
-            multiline
-          />
-          <TouchableOpacity
-            onPress={() => handleAddComment()}
-            style={[styles.sendButton, (submitting || !commentText.trim()) && styles.sendButtonDisabled]}
-            disabled={submitting || !commentText.trim()}
-          >
-            {submitting ? (
-              <ActivityIndicator size="small" color={COLORS.white} />
-            ) : (
-              <Ionicons name="send" size={20} color={COLORS.white} />
-            )}
-          </TouchableOpacity>
+          {replyingTo && (
+            <View style={styles.replyingToIndicator}>
+              <TouchableOpacity
+                onPress={handleCancelReply}
+                style={styles.cancelReplyButton}
+              >
+                <Ionicons name="close-circle" size={18} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+              <Text style={styles.replyingToText} numberOfLines={1}>
+                Replying to {comments.find(c => c._id === replyingTo)?.user?.username || "user"}
+              </Text>
+            </View>
+          )}
+          <View style={styles.inputRow}>
+            <Image
+              source={{ uri: user?.profileImg || "https://via.placeholder.com/32" }}
+              style={styles.inputAvatar}
+            />
+            <TextInput
+              ref={inputRef}
+              style={styles.input}
+              placeholder={replyingTo ? "Write a reply..." : "Write a comment..."}
+              placeholderTextColor={COLORS.placeholderText}
+              value={commentText}
+              onChangeText={setCommentText}
+              multiline
+            />
+            <TouchableOpacity
+              onPress={() => handleAddComment(replyingTo || null)}
+              style={[styles.sendButton, (submitting || !commentText.trim()) && styles.sendButtonDisabled]}
+              disabled={submitting || !commentText.trim()}
+            >
+              {submitting ? (
+                <ActivityIndicator size="small" color={COLORS.white} />
+              ) : (
+                <Ionicons name="send" size={20} color={COLORS.white} />
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </Modal>
