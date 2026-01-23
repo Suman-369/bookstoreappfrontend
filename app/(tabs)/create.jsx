@@ -209,14 +209,14 @@ export default function Create() {
         <View style={styles.card}>
           {/* HEADER */}
           <View style={styles.header}>
-            <Text style={styles.title}>Add Book Recommendation</Text>
-            <Text style={styles.subtitle}>Share your favorite reads with others</Text>
+            <Text style={styles.title}>Add Your Recommendation</Text>
+            <Text style={styles.subtitle}>Share your favorite meme's with others</Text>
           </View>
 
           <View style={styles.form}>
             {/* BOOK TITLE */}
             <View style={styles.formGroup}>
-              <Text style={styles.label}>Book Title</Text>
+              <Text style={styles.label}>Meme Title</Text>
               <View style={styles.inputContainer}>
                 <Ionicons
                   name="book-outline"
@@ -226,7 +226,7 @@ export default function Create() {
                 />
                 <TextInput
                   style={styles.input}
-                  placeholder="Enter book title"
+                  placeholder="Enter meme title"
                   placeholderTextColor={COLORS.placeholderText}
                   value={title}
                   onChangeText={setTitle}
@@ -242,7 +242,7 @@ export default function Create() {
 
             {/* IMAGE */}
             <View style={styles.formGroup}>
-              <Text style={styles.label}>Book Image</Text>
+              <Text style={styles.label}>Meme Image</Text>
               <TouchableOpacity style={styles.imagePicker} onPress={pickImage}>
                 {image ? (
                   <Image source={{ uri: image }} style={styles.previewImage} />
@@ -260,7 +260,7 @@ export default function Create() {
               <Text style={styles.label}>Caption</Text>
               <TextInput
                 style={styles.textArea}
-                placeholder="Write your review or thoughts about this book..."
+                placeholder="Write your review or thoughts about this meme..."
                 placeholderTextColor={COLORS.placeholderText}
                 value={caption}
                 onChangeText={setCaption}

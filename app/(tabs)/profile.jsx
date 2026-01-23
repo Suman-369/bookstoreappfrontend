@@ -39,7 +39,7 @@ export default function Profile() {
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Failed to fetch user books");
+      if (!response.ok) throw new Error(data.message || "Failed to fetch user memes");
 
       setBooks(data.books || data);
     } catch (error) {
@@ -64,7 +64,7 @@ export default function Profile() {
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Failed to delete book");
+      if (!response.ok) throw new Error(data.message || "Failed to delete meme");
 
       setBooks(books.filter((book) => book._id !== bookId));
       Alert.alert("Success", "Recommendation deleted successfully");
@@ -136,8 +136,8 @@ export default function Profile() {
 
       {/* YOUR RECOMMENDATIONS */}
       <View style={styles.booksHeader}>
-        <Text style={styles.booksTitle}>Your Recommendations 📚</Text>
-        <Text style={styles.booksCount}>{books.length} books</Text>
+        <Text style={styles.booksTitle}>Your Recommendations 📬</Text>
+        <Text style={styles.booksCount}>{books.length} meme's</Text>
       </View>
 
       <FlatList
@@ -159,7 +159,7 @@ export default function Profile() {
             <Ionicons name="book-outline" size={50} color={COLORS.textSecondary} />
             <Text style={styles.emptyText}>No recommendations yet</Text>
             <TouchableOpacity style={styles.addButton} onPress={() => router.push("/create")}>
-              <Text style={styles.addButtonText}>Add Your First Book</Text>
+              <Text style={styles.addButtonText}>Add Your First Meme</Text>
             </TouchableOpacity>
           </View>
         }

@@ -80,15 +80,14 @@ export default function Home() {
           <Text style={styles.username}>{item.user.username}</Text>
         </View>
       </View>
-
+      <Text style={styles.bookTitle}>{item.title}</Text>
+      <Text style={styles.caption}>{item.caption}</Text>
       <View style={styles.bookImageContainer}>
         <Image source={item.image} style={styles.bookImage} contentFit="cover" />
       </View>
 
       <View style={styles.bookDetails}>
-        <Text style={styles.bookTitle}>{item.title}</Text>
         <View style={styles.ratingContainer}>{renderRatingStars(item.rating)}</View>
-        <Text style={styles.caption}>{item.caption}</Text>
         <Text style={styles.date}>Shared on {formatPublishDate(item.createdAt)}</Text>
       </View>
     </View>
@@ -132,8 +131,8 @@ export default function Home() {
         onEndReachedThreshold={0.1}
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Book Store 📖</Text>
-            <Text style={styles.headerSubtitle}>Discover great reads from the community👇</Text>
+            <Text style={styles.headerTitle}>Your Meme's</Text>
+            <Text style={styles.headerSubtitle}>Freshest memes served daily. Scroll and LOL! 😂🔥</Text>
           </View>
         }
         ListFooterComponent={
@@ -145,7 +144,7 @@ export default function Home() {
           <View style={styles.emptyContainer}>
             <Ionicons name="book-outline" size={60} color={COLORS.textSecondary} />
             <Text style={styles.emptyText}>No recommendations yet</Text>
-            <Text style={styles.emptySubtext}>Be the first to share a book!</Text>
+            <Text style={styles.emptySubtext}>Be the first to share a meme!</Text>
           </View>
         }
       />
