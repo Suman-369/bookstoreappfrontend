@@ -88,9 +88,34 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     marginBottom: 6,
   },
+  ratingAndActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
   ratingContainer: {
     flexDirection: "row",
-    marginBottom: 8,
+    flex: 1,
+  },
+  actionsContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+  },
+  actionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  countButton: {
+    marginLeft: 2,
+  },
+  countText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.textSecondary,
+    marginLeft: 2,
   },
   caption: {
     fontSize: 14,

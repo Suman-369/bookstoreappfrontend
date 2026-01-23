@@ -17,6 +17,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { formatPublishDate } from "../../lib/utils";
 import COLORS from "../../constants/colors";
 import Loader from "../../components/Loader";
+import CommentModal from "../../components/CommentModal";
+import LikesModal from "../../components/LikesModal";
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -27,6 +29,10 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+  const [commentModalVisible, setCommentModalVisible] = useState(false);
+  const [likesModalVisible, setLikesModalVisible] = useState(false);
+  const [selectedBookId, setSelectedBookId] = useState(null);
+  const [likingBookId, setLikingBookId] = useState(null);
 
   const fetchBooks = async (pageNum = 1, refresh = false) => {
     try {
@@ -72,6 +78,72 @@ export default function Home() {
     }
   };
 
+  const handleLike = async (bookId) => {
+    if (likingBookId === bookId) return; // Prevent double clicks
+    
+    setLikingBookId(bookId);
+    try {
+      const response = await fetch(`${API_URL}/likes/${bookId}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) throw new Error("Failed to toggle like");
+
+      const data = await response.json();
+
+      // Update the book in the list
+      setBooks((prevBooks) =>
+        prevBooks.map((book) => {
+          if (book._id === bookId) {
+            return {
+              ...book,
+              isLiked: data.liked,
+              likesCount: data.liked
+                ? (book.likesCount || 0) + 1
+                : Math.max((book.likesCount || 0) - 1, 0),
+            };
+          }
+          return book;
+        })
+      );
+    } catch (error) {
+      console.error("Error toggling like:", error);
+    } finally {
+      setLikingBookId(null);
+    }
+  };
+
+  const handleOpenComments = (bookId) => {
+    setSelectedBookId(bookId);
+    setCommentModalVisible(true);
+  };
+
+  const handleOpenLikes = (bookId) => {
+    setSelectedBookId(bookId);
+    setLikesModalVisible(true);
+  };
+
+  const handleCommentAdded = (increment = true) => {
+    // Update comment count (increment or decrement)
+    if (selectedBookId) {
+      setBooks((prevBooks) =>
+        prevBooks.map((book) => {
+          if (book._id === selectedBookId) {
+            return {
+              ...book,
+              commentsCount: Math.max(
+                (book.commentsCount || 0) + (increment ? 1 : -1),
+                0
+              ),
+            };
+          }
+          return book;
+        })
+      );
+    }
+  };
+
   const renderItem = ({ item }) => (
     <View style={styles.bookCard}>
       <View style={styles.bookHeader}>
@@ -87,7 +159,43 @@ export default function Home() {
       </View>
 
       <View style={styles.bookDetails}>
-        <View style={styles.ratingContainer}>{renderRatingStars(item.rating)}</View>
+        <View style={styles.ratingAndActions}>
+          <View style={styles.ratingContainer}>{renderRatingStars(item.rating)}</View>
+          <View style={styles.actionsContainer}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => handleLike(item._id)}
+              disabled={likingBookId === item._id}
+            >
+              <Ionicons
+                name={item.isLiked ? "heart" : "heart-outline"}
+                size={20}
+                color={item.isLiked ? "#e74c3c" : COLORS.textSecondary}
+              />
+              {item.likesCount > 0 && (
+                <TouchableOpacity
+                  onPress={() => handleOpenLikes(item._id)}
+                  style={styles.countButton}
+                >
+                  <Text style={styles.countText}>{item.likesCount}</Text>
+                </TouchableOpacity>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => handleOpenComments(item._id)}
+            >
+              <Ionicons
+                name="chatbubble-outline"
+                size={20}
+                color={COLORS.textSecondary}
+              />
+              {item.commentsCount > 0 && (
+                <Text style={styles.countText}>{item.commentsCount}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
         <Text style={styles.date}>Shared on {formatPublishDate(item.createdAt)}</Text>
       </View>
     </View>
@@ -147,6 +255,23 @@ export default function Home() {
             <Text style={styles.emptySubtext}>Be the first to share a meme!</Text>
           </View>
         }
+      />
+      <CommentModal
+        visible={commentModalVisible}
+        onClose={() => {
+          setCommentModalVisible(false);
+          setSelectedBookId(null);
+        }}
+        bookId={selectedBookId}
+        onCommentAdded={handleCommentAdded}
+      />
+      <LikesModal
+        visible={likesModalVisible}
+        onClose={() => {
+          setLikesModalVisible(false);
+          setSelectedBookId(null);
+        }}
+        bookId={selectedBookId}
       />
     </View>
   );
