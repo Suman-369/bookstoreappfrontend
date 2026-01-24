@@ -13,6 +13,7 @@ import { API_URL } from "../../constants/api";
 import { useAuthStore } from "../../store/authStore";
 import styles from "../../assets/styles/profile.styles";
 import ProfileHeader from "../../components/ProfileHeader";
+import FriendsListModal from "../../components/FriendsListModal";
 import LogoutButton from "../../components/LogoutButton";
 import { Ionicons } from "@expo/vector-icons";
 import COLORS from "../../constants/colors";
@@ -25,8 +26,9 @@ export default function Profile() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [deleteBookId, setDeleteBookId] = useState(null);
+  const [friendsModalVisible, setFriendsModalVisible] = useState(false);
 
-  const { token } = useAuthStore();
+  const { token, user } = useAuthStore();
 
   const router = useRouter();
 
@@ -131,7 +133,7 @@ export default function Profile() {
 
   return (
     <View style={styles.container}>
-      <ProfileHeader />
+      <ProfileHeader onFriendCountPress={() => setFriendsModalVisible(true)} />
       <LogoutButton />
 
       {/* YOUR RECOMMENDATIONS */}
@@ -163,6 +165,11 @@ export default function Profile() {
             </TouchableOpacity>
           </View>
         }
+      />
+      <FriendsListModal
+        visible={friendsModalVisible}
+        onClose={() => setFriendsModalVisible(false)}
+        userId={user?._id}
       />
     </View>
   );

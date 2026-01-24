@@ -7,6 +7,7 @@ import {
   FlatList,
   ActivityIndicator,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useAuthStore } from "../store/authStore";
@@ -17,6 +18,7 @@ import styles from "../assets/styles/notificationModal.styles";
 
 export default function NotificationModal({ visible, onClose, onNotificationClick, onModalOpen }) {
   const { token, user } = useAuthStore();
+  const router = useRouter();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -111,6 +113,31 @@ export default function NotificationModal({ visible, onClose, onNotificationClic
         }
       }
 
+      // Fetch friend request notifications
+      try {
+        const friendRequestsResponse = await fetch(`${API_URL}/friends/requests/received`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (friendRequestsResponse.ok) {
+          const friendRequestsData = await friendRequestsResponse.json();
+          const friendRequests = friendRequestsData.requests || friendRequestsData || [];
+
+          friendRequests.forEach((request) => {
+            if (request.sender && request.sender._id !== user?._id) {
+              allNotifications.push({
+                _id: `friend_request_${request._id}`,
+                type: "friend_request",
+                user: request.sender,
+                createdAt: request.createdAt || request.sentAt,
+              });
+            }
+          });
+        }
+      } catch (error) {
+        console.error("Error fetching friend requests:", error);
+      }
+
       // Sort notifications by date (newest first)
       allNotifications.sort(
         (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
@@ -124,53 +151,70 @@ export default function NotificationModal({ visible, onClose, onNotificationClic
     }
   };
 
-  const renderNotificationItem = ({ item }) => (
-    <TouchableOpacity 
-      style={styles.notificationItem} 
-      activeOpacity={0.7}
-      onPress={() => {
-        if (onNotificationClick && item.book?._id) {
-          onNotificationClick(item.book._id, item._id);
+  const renderNotificationItem = ({ item }) => {
+    const handlePress = () => {
+      if (item.type === "friend_request") {
+        // Navigate to user profile for friend requests
+        if (item.user?._id) {
+          onClose();
+          router.push({
+            pathname: "/(tabs)/userProfile",
+            params: { userId: item.user._id },
+          });
         }
-      }}
-    >
-      <Image
-        source={{ uri: item.user?.profileImg || "https://via.placeholder.com/48" }}
-        style={styles.notificationAvatar}
-      />
-      <View style={styles.notificationContent}>
-        <View style={styles.notificationTextContainer}>
-          <Text style={styles.notificationText}>
-            <Text style={styles.notificationUsername}>
-              {item.user?.username || "User"}
+      } else if (onNotificationClick && item.book?._id) {
+        onNotificationClick(item.book._id, item._id);
+      }
+    };
+
+    return (
+      <TouchableOpacity 
+        style={styles.notificationItem} 
+        activeOpacity={0.7}
+        onPress={handlePress}
+      >
+        <Image
+          source={{ uri: item.user?.profileImg || "https://via.placeholder.com/48" }}
+          style={styles.notificationAvatar}
+        />
+        <View style={styles.notificationContent}>
+          <View style={styles.notificationTextContainer}>
+            <Text style={styles.notificationText}>
+              <Text style={styles.notificationUsername}>
+                {item.user?.username || "User"}
+              </Text>
+              {item.type === "like" ? (
+                <Text> liked your post</Text>
+              ) : item.type === "friend_request" ? (
+                <Text> wants to be your friend</Text>
+              ) : (
+                <Text> commented: "{item.commentText?.substring(0, 50)}
+                  {item.commentText?.length > 50 ? "..." : ""}"</Text>
+              )}
             </Text>
-            {item.type === "like" ? (
-              <Text> liked your post</Text>
-            ) : (
-              <Text> commented: "{item.commentText?.substring(0, 50)}
-                {item.commentText?.length > 50 ? "..." : ""}"</Text>
-            )}
+          </View>
+          <Text style={styles.notificationDate}>
+            {formatPublishDate(item.createdAt)}
           </Text>
         </View>
-        <Text style={styles.notificationDate}>
-          {formatPublishDate(item.createdAt)}
-        </Text>
-      </View>
-      <View style={styles.notificationIconContainer}>
-        {item.type === "like" ? (
-          <Ionicons name="heart" size={20} color="#e74c3c" />
-        ) : (
-          <Ionicons name="chatbubble" size={20} color={COLORS.primary} />
+        <View style={styles.notificationIconContainer}>
+          {item.type === "like" ? (
+            <Ionicons name="heart" size={20} color="#e74c3c" />
+          ) : item.type === "friend_request" ? (
+            <Ionicons name="person-add" size={20} color={COLORS.primary} />
+          ) : (
+            <Ionicons name="chatbubble" size={20} color={COLORS.primary} />
+          )}
+        </View>
+        {item.book?.image && (
+          <Image
+            source={{ uri: item.book.image }}
+            style={styles.notificationPostImage}
+          />
         )}
-      </View>
-      {item.book?.image && (
-        <Image
-          source={{ uri: item.book.image }}
-          style={styles.notificationPostImage}
-        />
-      )}
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <Modal
@@ -202,7 +246,7 @@ export default function NotificationModal({ visible, onClose, onNotificationClic
                 <Ionicons name="notifications-outline" size={48} color={COLORS.textSecondary} />
                 <Text style={styles.emptyText}>No notifications yet</Text>
                 <Text style={styles.emptySubtext}>
-                  When people like or comment on your posts, you'll see them here
+                  When people like, comment on your posts, or send friend requests, you'll see them here
                 </Text>
               </View>
             }

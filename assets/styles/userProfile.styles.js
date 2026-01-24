@@ -1,4 +1,4 @@
-// styles/profile.styles.js
+// styles/userProfile.styles.js
 import { StyleSheet } from "react-native";
 import COLORS from "../../constants/colors";
 
@@ -9,11 +9,20 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 0,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
+  header: {
+    flexDirection: "row",
     alignItems: "center",
-    backgroundColor: COLORS.background,
+    justifyContent: "space-between",
+    marginBottom: 16,
+    paddingTop: 8,
+  },
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: COLORS.textPrimary,
   },
   profileHeader: {
     flexDirection: "row",
@@ -68,24 +77,50 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginLeft: 4,
   },
-  logoutButton: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    padding: 12,
+  friendButtonContainer: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 16,
+  },
+  friendButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 24,
-    shadowColor: COLORS.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 8,
   },
-  logoutText: {
+  addButton: {
+    backgroundColor: COLORS.primary,
+    marginBottom: 16,
+  },
+  pendingButton: {
+    backgroundColor: COLORS.cardBackground,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 16,
+  },
+  acceptButton: {
+    backgroundColor: "#27ae60",
+    flex: 1,
+  },
+  rejectButton: {
+    backgroundColor: "#e74c3c",
+    flex: 1,
+  },
+  unfriendButton: {
+    backgroundColor: "#e74c3c",
+    marginBottom: 16,
+  },
+  cancelButton: {
+    backgroundColor: "#95a5a6",
+    marginBottom: 16,
+  },
+  friendButtonText: {
     color: COLORS.white,
     fontWeight: "600",
-    marginLeft: 8,
+    fontSize: 14,
   },
   booksHeader: {
     flexDirection: "row",
@@ -149,10 +184,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: COLORS.textSecondary,
   },
-  deleteButton: {
-    padding: 8,
-    justifyContent: "center",
-  },
   emptyContainer: {
     alignItems: "center",
     justifyContent: "center",
@@ -164,24 +195,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: COLORS.textPrimary,
     marginTop: 16,
-    marginBottom: 20,
     textAlign: "center",
-  },
-  addButton: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    shadowColor: COLORS.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  addButtonText: {
-    color: COLORS.white,
-    fontWeight: "600",
-    fontSize: 14,
   },
 });
 

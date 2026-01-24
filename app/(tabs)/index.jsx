@@ -8,6 +8,7 @@ import {
 } from "react-native";
 import { useAuthStore } from "../../store/authStore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useRouter } from "expo-router";
 
 import { Image } from "expo-image";
 import { useEffect, useState, useRef } from "react";
@@ -26,6 +27,7 @@ export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function Home() {
   const { token, user } = useAuthStore();
+  const router = useRouter();
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -39,6 +41,15 @@ export default function Home() {
   const [notificationCount, setNotificationCount] = useState(0);
   const [visitedNotifications, setVisitedNotifications] = useState(new Set());
   const flatListRef = useRef(null);
+
+  const handleUserProfilePress = (userId) => {
+    if (userId) {
+      router.push({
+        pathname: "/(tabs)/userProfile",
+        params: { userId },
+      });
+    }
+  };
 
   const fetchBooks = async (pageNum = 1, refresh = false) => {
     try {
@@ -178,6 +189,29 @@ export default function Home() {
         }
       }
 
+      // Fetch friend request notifications
+      try {
+        const friendRequestsResponse = await fetch(`${API_URL}/friends/requests/received`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (friendRequestsResponse.ok) {
+          const friendRequestsData = await friendRequestsResponse.json();
+          const friendRequests = friendRequestsData.requests || friendRequestsData || [];
+
+          friendRequests.forEach((request) => {
+            if (request.sender && request.sender._id !== user?._id) {
+              const notificationId = `friend_request_${request._id}`;
+              if (!visited.has(notificationId)) {
+                unvisitedCount++;
+              }
+            }
+          });
+        }
+      } catch (error) {
+        console.error("Error fetching friend requests:", error);
+      }
+
       setNotificationCount(unvisitedCount);
     } catch (error) {
       console.error("Error fetching notification count:", error);
@@ -264,10 +298,14 @@ export default function Home() {
   const renderItem = ({ item }) => (
     <View style={styles.bookCard}>
       <View style={styles.bookHeader}>
-        <View style={styles.userInfo}>
+        <TouchableOpacity
+          style={styles.userInfo}
+          onPress={() => handleUserProfilePress(item.user._id)}
+          activeOpacity={0.7}
+        >
           <Image source={{ uri: item.user.profileImg }} style={styles.avatar} />
           <Text style={styles.username}>{item.user.username}</Text>
-        </View>
+        </TouchableOpacity>
       </View>
       <Text style={styles.bookTitle}>{item.title}</Text>
       <Text style={styles.caption}>{item.caption}</Text>
@@ -514,6 +552,24 @@ export default function Home() {
                 } catch (error) {
                   console.error("Error:", error);
                 }
+              }
+              
+              // Get friend requests
+              try {
+                const friendRequestsResponse = await fetch(`${API_URL}/friends/requests/received`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                if (friendRequestsResponse.ok) {
+                  const friendRequestsData = await friendRequestsResponse.json();
+                  const friendRequests = friendRequestsData.requests || friendRequestsData || [];
+                  friendRequests.forEach((request) => {
+                    if (request.sender && request.sender._id !== user?._id) {
+                      allNotificationIds.push(`friend_request_${request._id}`);
+                    }
+                  });
+                }
+              } catch (error) {
+                console.error("Error fetching friend requests:", error);
               }
               
               await markNotificationsAsVisited(allNotificationIds);
