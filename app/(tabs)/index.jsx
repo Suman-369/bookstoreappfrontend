@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import styles from "../../assets/styles/home.styles";
 import { API_URL } from "../../constants/api";
 import { Ionicons } from "@expo/vector-icons";
-import { formatPublishDate } from "../../dist/_expo/lib/utils";
+import { formatPublishDate } from "../../utils/dateUtils";
 import COLORS from "../../constants/colors";
 import Loader from "../../components/Loader";
 import CommentModal from "../../components/CommentModal";

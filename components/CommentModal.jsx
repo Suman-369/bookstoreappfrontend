@@ -15,7 +15,7 @@ import { Image } from "expo-image";
 import { useAuthStore } from "../store/authStore";
 import { API_URL } from "../constants/api";
 import COLORS from "../constants/colors";
-import { formatPublishDate } from "../dist/_expo/lib/utils";
+import { formatPublishDate } from "../utils/dateUtils";
 import styles from "../assets/styles/commentModal.styles";
 
 export default function CommentModal({ visible, onClose, bookId, onCommentAdded }) {
