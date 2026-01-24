@@ -42,6 +42,7 @@ export default function Home() {
   const [notificationCount, setNotificationCount] = useState(0);
   const [visitedNotifications, setVisitedNotifications] = useState(new Set());
   const flatListRef = useRef(null);
+  const videoRefs = useRef({});
 
   const handleUserProfilePress = (userId) => {
     if (userId) {
@@ -274,6 +275,16 @@ export default function Home() {
     setLikesModalVisible(true);
   };
 
+  const handleVideoPlaybackStatusUpdate = (bookId) => (status) => {
+    if (status.isPlaying) {
+      Object.entries(videoRefs.current).forEach(([id, ref]) => {
+        if (id !== bookId && ref) {
+          ref.pauseAsync().catch(() => {});
+        }
+      });
+    }
+  };
+
   const handleCommentAdded = (increment = true) => {
     // Update comment count (increment or decrement)
     if (selectedBookId) {
@@ -316,11 +327,15 @@ export default function Home() {
         <View style={styles.bookImageContainer}>
           {isVideo ? (
             <Video
+              ref={(r) => {
+                videoRefs.current[item._id] = r ?? null;
+              }}
               source={{ uri: item.image }}
               style={styles.bookImage}
               useNativeControls
               resizeMode={ResizeMode.CONTAIN}
               isLooping
+              onPlaybackStatusUpdate={handleVideoPlaybackStatusUpdate(item._id)}
             />
           ) : (
             <Image source={{ uri: item.image }} style={styles.bookImage} contentFit="cover" />
