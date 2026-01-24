@@ -119,7 +119,7 @@ const styles = StyleSheet.create({
   },
   bookImageContainer: {
     width: "100%",
-    height: 200,
+    height: 250,
     borderRadius: 12,
     overflow: "hidden",
     marginBottom: 12,

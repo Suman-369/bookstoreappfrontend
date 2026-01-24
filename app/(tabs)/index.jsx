@@ -12,6 +12,7 @@ import { useRouter } from "expo-router";
 
 import { Image } from "expo-image";
 import { useEffect, useState, useRef } from "react";
+import { Video, ResizeMode } from "expo-av";
 
 import styles from "../../assets/styles/home.styles";
 import { API_URL } from "../../constants/api";
@@ -295,23 +296,36 @@ export default function Home() {
     }
   };
 
-  const renderItem = ({ item }) => (
-    <View style={styles.bookCard}>
-      <View style={styles.bookHeader}>
-        <TouchableOpacity
-          style={styles.userInfo}
-          onPress={() => handleUserProfilePress(item.user._id)}
-          activeOpacity={0.7}
-        >
-          <Image source={{ uri: item.user.profileImg }} style={styles.avatar} />
-          <Text style={styles.username}>{item.user.username}</Text>
-        </TouchableOpacity>
-      </View>
-      <Text style={styles.bookTitle}>{item.title}</Text>
-      <Text style={styles.caption}>{item.caption}</Text>
-      <View style={styles.bookImageContainer}>
-        <Image source={item.image} style={styles.bookImage} contentFit="cover" />
-      </View>
+  const renderItem = ({ item }) => {
+    const isVideo = item.mediaType === "video";
+    
+    return (
+      <View style={styles.bookCard}>
+        <View style={styles.bookHeader}>
+          <TouchableOpacity
+            style={styles.userInfo}
+            onPress={() => handleUserProfilePress(item.user._id)}
+            activeOpacity={0.7}
+          >
+            <Image source={{ uri: item.user.profileImg }} style={styles.avatar} />
+            <Text style={styles.username}>{item.user.username}</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.bookTitle}>{item.title}</Text>
+        <Text style={styles.caption}>{item.caption}</Text>
+        <View style={styles.bookImageContainer}>
+          {isVideo ? (
+            <Video
+              source={{ uri: item.image }}
+              style={styles.bookImage}
+              useNativeControls
+              resizeMode={ResizeMode.CONTAIN}
+              isLooping
+            />
+          ) : (
+            <Image source={{ uri: item.image }} style={styles.bookImage} contentFit="cover" />
+          )}
+        </View>
 
       <View style={styles.bookDetails}>
         <View style={styles.ratingAndActions}>
@@ -354,7 +368,8 @@ export default function Home() {
         <Text style={styles.date}>Shared on {formatPublishDate(item.createdAt)}</Text>
       </View>
     </View>
-  );
+    );
+  };
 
   const renderRatingStars = (rating) => {
     const stars = [];

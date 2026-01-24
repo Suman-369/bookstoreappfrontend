@@ -18,72 +18,107 @@ import COLORS from "../../constants/colors";
 import { useAuthStore } from "../../store/authStore";
 
 import * as ImagePicker from "expo-image-picker";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import { API_URL } from "../../constants/api";
+
+const MAX_VIDEO_MB = 100;
+const MAX_IMAGE_MB = 50;
+
+function getMediaFormInfo(uri, mediaType) {
+  const raw = uri.split(/[?#]/)[0];
+  const ext = (raw.split(".").pop() || "").toLowerCase();
+  const mimeMap = { mp4: "video/mp4", mov: "video/quicktime", m4v: "video/x-m4v", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp" };
+  const mime = mimeMap[ext] || (mediaType === "video" ? "video/mp4" : "image/jpeg");
+  const name = mediaType === "video"
+    ? (["mp4", "mov", "m4v"].includes(ext) ? `video.${ext}` : "video.mp4")
+    : (["jpg", "jpeg", "png", "gif", "webp"].includes(ext) ? `image.${ext === "jpeg" ? "jpg" : ext}` : "image.jpg");
+  return { mime, name };
+}
 
 export default function Create() {
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
   const [rating, setRating] = useState(3);
-  const [image, setImage] = useState(null); // to display the selected image
-  const [imageBase64, setImageBase64] = useState(null);
+  const [media, setMedia] = useState(null);
+  const [mediaType, setMediaType] = useState(null); // 'image' | 'video'
   const [loading, setLoading] = useState(false);
 
   const router = useRouter();
   const { token, logout } = useAuthStore();
 
 
-  const pickImage = async () => {
+  const pickMedia = async () => {
     try {
       // request permission if needed
       if (Platform.OS !== "web") {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
         if (status !== "granted") {
-          Alert.alert("Permission Denied", "We need camera roll permissions to upload an image");
+          Alert.alert("Permission Denied", "We need camera roll permissions to upload media");
           return;
         }
       }
 
-      // launch image library with optimized settings
+      // Show action sheet to choose between image and video
+      Alert.alert(
+        "Select Media Type",
+        "Choose what you want to upload",
+        [
+          {
+            text: "Image",
+            onPress: () => pickImage(),
+          },
+          {
+            text: "Video",
+            onPress: () => pickVideo(),
+          },
+          {
+            text: "Cancel",
+            style: "cancel",
+          },
+        ]
+      );
+    } catch (error) {
+      console.error("Error picking media:", error);
+      Alert.alert("Error", "There was a problem selecting media");
+    }
+  };
+
+  const checkFileSize = async (uri, maxMB, label) => {
+    try {
+      const info = await FileSystem.getInfoAsync(uri);
+      if (info.exists && !info.isDirectory && typeof info.size === "number") {
+        const sizeMB = info.size / 1024 / 1024;
+        if (sizeMB > maxMB) {
+          Alert.alert(
+            `${label} Too Large`,
+            `Size is ${sizeMB.toFixed(1)}MB. Maximum ${maxMB}MB. Pick a smaller file.`
+          );
+          return false;
+        }
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  };
+
+  const pickImage = async () => {
+    try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: "images",
         allowsEditing: true,
         aspect: [4, 3],
-        quality: 0.3, // reduced quality for smaller file size
-        base64: true,
-        exif: false, // disable EXIF data to reduce size
+        quality: 0.8,
+        exif: false,
       });
 
       if (!result.canceled) {
         const asset = result.assets[0];
-        setImage(asset.uri);
-
-        let base64Data = null;
-
-        // if base64 is provided, use it
-        if (asset.base64) {
-          base64Data = asset.base64;
-        } else {
-          // otherwise, convert to base64
-          base64Data = await FileSystem.readAsStringAsync(asset.uri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-        }
-
-        // Calculate approximate size (base64 is ~33% larger than binary)
-        const base64SizeMB = (base64Data.length * 3) / 4 / 1024 / 1024;
-        const maxSizeMB = 50;
-
-        if (base64SizeMB > maxSizeMB) {
-          Alert.alert(
-            "Image Too Large",
-            `Image size is ${base64SizeMB.toFixed(2)}MB. Maximum allowed is ${maxSizeMB}MB. Please select a smaller image.`
-          );
-          return;
-        }
-
-        setImageBase64(base64Data);
+        const ok = await checkFileSize(asset.uri, MAX_IMAGE_MB, "Image");
+        if (!ok) return;
+        setMedia(asset.uri);
+        setMediaType("image");
       }
     } catch (error) {
       console.error("Error picking image:", error);
@@ -91,9 +126,31 @@ export default function Create() {
     }
   };
 
+  const pickVideo = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: "videos",
+        allowsEditing: true,
+        quality: 1,
+        videoMaxDuration: 60,
+      });
+
+      if (!result.canceled) {
+        const asset = result.assets[0];
+        const ok = await checkFileSize(asset.uri, MAX_VIDEO_MB, "Video");
+        if (!ok) return;
+        setMedia(asset.uri);
+        setMediaType("video");
+      }
+    } catch (error) {
+      console.error("Error picking video:", error);
+      Alert.alert("Error", "There was a problem selecting your video");
+    }
+  };
+
   const handleSubmit = async () => {
-    if (!title || !caption || !imageBase64 || !rating) {
-      Alert.alert("Error", "Please fill in all fields");
+    if (!title || !caption || !media || !rating || !mediaType) {
+      Alert.alert("Error", "Please fill in all fields and select media");
       return;
     }
 
@@ -105,76 +162,45 @@ export default function Create() {
 
     try {
       setLoading(true);
-
-      // Validate payload size before sending (50MB limit)
-      const payloadSize = JSON.stringify({
-        title,
-        caption,
-        rating: rating.toString(),
-        image: `data:image/jpeg;base64,${imageBase64}`,
-      }).length;
-      const payloadSizeMB = payloadSize / 1024 / 1024;
-
-      if (payloadSizeMB > 50) {
-        Alert.alert(
-          "Payload Too Large",
-          `Total payload size is ${payloadSizeMB.toFixed(2)}MB. Maximum allowed is 50MB. Please use a smaller image.`
-        );
-        setLoading(false);
-        return;
-      }
-
-      // get file extension from URI or default to jpeg
-      const uriParts = image.split(".");
-      const fileType = uriParts[uriParts.length - 1];
-      const imageType = fileType ? `image/${fileType.toLowerCase()}` : "image/jpeg";
-
-      const imageDataUrl = `data:${imageType};base64,${imageBase64}`;
+      const { mime, name } = getMediaFormInfo(media, mediaType);
+      const form = new FormData();
+      form.append("media", { uri: media, type: mime, name } );
+      form.append("title", title);
+      form.append("caption", caption);
+      form.append("rating", String(rating));
+      form.append("mediaType", mediaType);
 
       const response = await fetch(`${API_URL}/books/create`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          title,
-          caption,
-          rating: rating.toString(),
-          image: imageDataUrl,
-        }),
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
       });
 
-      // Check if response is ok before parsing JSON
       if (!response.ok) {
         const text = await response.text();
         let errorMessage = "Something went wrong";
         try {
-          const errorData = JSON.parse(text);
-          errorMessage = errorData.message || errorMessage;
+          const data = JSON.parse(text);
+          errorMessage = data.message || errorMessage;
         } catch {
           errorMessage = text || `Server error: ${response.status}`;
         }
-        
-        // If unauthorized, clear token and redirect to login
         if (response.status === 401) {
           await logout();
           Alert.alert("Session Expired", "Please log in again to continue.");
           router.replace("/(auth)");
           return;
         }
-        
         throw new Error(errorMessage);
       }
 
-      const data = await response.json();
-
-      Alert.alert("Success", "Your book recommendation has been posted!");
+      await response.json();
+      Alert.alert("Success", "Your meme recommendation has been posted!");
       setTitle("");
       setCaption("");
       setRating(3);
-      setImage(null);
-      setImageBase64(null);
+      setMedia(null);
+      setMediaType(null);
       router.push("/");
     } catch (error) {
       console.error("Error creating post:", error);
@@ -240,16 +266,24 @@ export default function Create() {
               {renderRatingPicker()}
             </View>
 
-            {/* IMAGE */}
+            {/* MEDIA (IMAGE/VIDEO) */}
             <View style={styles.formGroup}>
-              <Text style={styles.label}>Meme Image</Text>
-              <TouchableOpacity style={styles.imagePicker} onPress={pickImage}>
-                {image ? (
-                  <Image source={{ uri: image }} style={styles.previewImage} />
+              <Text style={styles.label}>Meme Media</Text>
+              <TouchableOpacity style={styles.imagePicker} onPress={pickMedia}>
+                {media ? (
+                  mediaType === "video" ? (
+                    <View style={styles.previewImage}>
+                      <Ionicons name="videocam" size={40} color={COLORS.primary} style={{ marginBottom: 8 }} />
+                      <Text style={styles.placeholderText}>Video Selected</Text>
+                      <Text style={[styles.placeholderText, { fontSize: 12, marginTop: 4 }]}>Tap to change</Text>
+                    </View>
+                  ) : (
+                    <Image source={{ uri: media }} style={styles.previewImage} />
+                  )
                 ) : (
                   <View style={styles.placeholderContainer}>
-                    <Ionicons name="image-outline" size={40} color={COLORS.textSecondary} />
-                    <Text style={styles.placeholderText}>Tap to select image</Text>
+                    <Ionicons name="images-outline" size={40} color={COLORS.textSecondary} />
+                    <Text style={styles.placeholderText}>Tap to select image or video</Text>
                   </View>
                 )}
               </TouchableOpacity>
