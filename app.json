@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Your Meme's",
-    "slug": "meme-store",
+    "slug": "book-store",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
