@@ -7,9 +7,10 @@ import {
   RefreshControl,
 } from "react-native";
 import { useAuthStore } from "../../store/authStore";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { Image } from "expo-image";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 import styles from "../../assets/styles/home.styles";
 import { API_URL } from "../../constants/api";
@@ -19,11 +20,12 @@ import COLORS from "../../constants/colors";
 import Loader from "../../components/Loader";
 import CommentModal from "../../components/CommentModal";
 import LikesModal from "../../components/LikesModal";
+import NotificationModal from "../../components/NotificationModal";
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function Home() {
-  const { token } = useAuthStore();
+  const { token, user } = useAuthStore();
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -31,8 +33,12 @@ export default function Home() {
   const [hasMore, setHasMore] = useState(true);
   const [commentModalVisible, setCommentModalVisible] = useState(false);
   const [likesModalVisible, setLikesModalVisible] = useState(false);
+  const [notificationModalVisible, setNotificationModalVisible] = useState(false);
   const [selectedBookId, setSelectedBookId] = useState(null);
   const [likingBookId, setLikingBookId] = useState(null);
+  const [notificationCount, setNotificationCount] = useState(0);
+  const [visitedNotifications, setVisitedNotifications] = useState(new Set());
+  const flatListRef = useRef(null);
 
   const fetchBooks = async (pageNum = 1, refresh = false) => {
     try {
@@ -69,8 +75,114 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetchBooks();
+    const initialize = async () => {
+      await loadVisitedNotifications();
+      await fetchBooks();
+      // Wait a bit for visitedNotifications to be set
+      setTimeout(() => {
+        fetchNotificationCount();
+      }, 100);
+    };
+    initialize();
   }, []);
+
+  const loadVisitedNotifications = async () => {
+    try {
+      const visited = await AsyncStorage.getItem("visitedNotifications");
+      if (visited) {
+        setVisitedNotifications(new Set(JSON.parse(visited)));
+      }
+    } catch (error) {
+      console.error("Error loading visited notifications:", error);
+    }
+  };
+
+  const saveVisitedNotifications = async (visitedSet) => {
+    try {
+      await AsyncStorage.setItem("visitedNotifications", JSON.stringify(Array.from(visitedSet)));
+    } catch (error) {
+      console.error("Error saving visited notifications:", error);
+    }
+  };
+
+  const markNotificationsAsVisited = async (notificationIds) => {
+    const newVisited = new Set([...visitedNotifications, ...notificationIds]);
+    setVisitedNotifications(newVisited);
+    await saveVisitedNotifications(newVisited);
+    // Update count with new visited set
+    await fetchNotificationCount(newVisited);
+  };
+
+  const fetchNotificationCount = async (visitedSet = null) => {
+    try {
+      // Use provided visitedSet or current state
+      const visited = visitedSet || visitedNotifications;
+      
+      // Fetch user's posts
+      const booksResponse = await fetch(`${API_URL}/books/user`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!booksResponse.ok) return;
+
+      const booksData = await booksResponse.json();
+      const userBooks = booksData.books || [];
+
+      let unvisitedCount = 0;
+
+      for (const book of userBooks) {
+        // Fetch likes for this book
+        try {
+          const likesResponse = await fetch(`${API_URL}/likes/${book._id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (likesResponse.ok) {
+            const likesData = await likesResponse.json();
+            const likes = likesData.likes || [];
+            // Count unvisited likes from other users
+            likes.forEach((like) => {
+              if (like.user?._id !== user?._id) {
+                const notificationId = `like_${like._id}`;
+                if (!visited.has(notificationId)) {
+                  unvisitedCount++;
+                }
+              }
+            });
+          }
+        } catch (error) {
+          console.error("Error fetching likes:", error);
+        }
+
+        // Fetch comments for this book
+        try {
+          const commentsResponse = await fetch(`${API_URL}/comments/${book._id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (commentsResponse.ok) {
+            const commentsData = await commentsResponse.json();
+            const comments = commentsData.comments || [];
+            // Count unvisited comments from other users (excluding replies)
+            comments.forEach((comment) => {
+              if (comment.user?._id !== user?._id && !comment.parentComment) {
+                const notificationId = `comment_${comment._id}`;
+                if (!visited.has(notificationId)) {
+                  unvisitedCount++;
+                }
+              }
+            });
+          }
+        } catch (error) {
+          console.error("Error fetching comments:", error);
+        }
+      }
+
+      setNotificationCount(unvisitedCount);
+    } catch (error) {
+      console.error("Error fetching notification count:", error);
+    }
+  };
 
   const handleLoadMore = async () => {
     if (hasMore && !loading && !refreshing) {
@@ -107,6 +219,9 @@ export default function Home() {
           return book;
         })
       );
+      
+      // Refresh notification count after like action
+      fetchNotificationCount();
     } catch (error) {
       console.error("Error toggling like:", error);
     } finally {
@@ -141,6 +256,8 @@ export default function Home() {
           return book;
         })
       );
+      // Refresh notification count after comment action
+      fetchNotificationCount();
     }
   };
 
@@ -222,15 +339,29 @@ export default function Home() {
   return (
     <View style={styles.container}>
       <FlatList
+        ref={flatListRef}
         data={books}
         renderItem={renderItem}
         keyExtractor={(item) => item._id}
         contentContainerStyle={styles.listContainer}
         showsVerticalScrollIndicator={false}
+        onScrollToIndexFailed={(info) => {
+          // Fallback if scrollToIndex fails
+          const wait = new Promise((resolve) => setTimeout(resolve, 500));
+          wait.then(() => {
+            flatListRef.current?.scrollToIndex({
+              index: info.index,
+              animated: true,
+            });
+          });
+        }}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => fetchBooks(1, true)}
+            onRefresh={() => {
+              fetchBooks(1, true);
+              fetchNotificationCount();
+            }}
             colors={[COLORS.primary]}
             tintColor={COLORS.primary}
           />
@@ -238,9 +369,33 @@ export default function Home() {
         onEndReached={handleLoadMore}
         onEndReachedThreshold={0.1}
         ListHeaderComponent={
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>Your Meme's</Text>
-            <Text style={styles.headerSubtitle}>Freshest memes served daily. Scroll and LOL! 😂🔥</Text>
+          <View>
+            <View style={styles.headerTop}>
+              <View style={styles.header}>
+                <View style={styles.headerSpacer} />
+                <View style={styles.headerTitleContainer}>
+                  <Text style={styles.headerTitle}>Your Meme's</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.notificationButton}
+                  onPress={async () => {
+                    setNotificationModalVisible(true);
+                    // Mark all current notifications as visited when opening modal
+                    await fetchNotificationCount();
+                  }}
+                >
+                  <Ionicons name="notifications" size={26} color={COLORS.primary} />
+                  {notificationCount > 0 && (
+                    <View style={styles.notificationBadge}>
+                      <Text style={styles.notificationBadgeText}>
+                        {notificationCount > 99 ? "99+" : notificationCount}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.headerSubtitle}>Freshest memes served daily. Scroll and LOL! 😂🔥</Text>
+            </View>
           </View>
         }
         ListFooterComponent={
@@ -272,6 +427,102 @@ export default function Home() {
           setSelectedBookId(null);
         }}
         bookId={selectedBookId}
+      />
+      <NotificationModal
+        visible={notificationModalVisible}
+        onClose={async () => {
+          setNotificationModalVisible(false);
+          await fetchNotificationCount();
+        }}
+        onNotificationClick={async (bookId, notificationId) => {
+          // Mark notification as visited
+          const newVisited = new Set([...visitedNotifications, notificationId]);
+          setVisitedNotifications(newVisited);
+          await saveVisitedNotifications(newVisited);
+          
+          // Close modal
+          setNotificationModalVisible(false);
+          
+          // Find and scroll to the post
+          const postIndex = books.findIndex((book) => book._id === bookId);
+          if (postIndex !== -1 && flatListRef.current) {
+            setTimeout(() => {
+              try {
+                flatListRef.current?.scrollToIndex({
+                  index: postIndex,
+                  animated: true,
+                  viewPosition: 0.1,
+                });
+              } catch (error) {
+                // If scrollToIndex fails, try scrollToOffset as fallback
+                console.log("Scroll to index failed, using offset");
+                flatListRef.current?.scrollToOffset({
+                  offset: postIndex * 300, // Approximate offset
+                  animated: true,
+                });
+              }
+            }, 300);
+          }
+          
+          // Refresh notification count with updated visited set
+          await fetchNotificationCount(newVisited);
+        }}
+        onModalOpen={async () => {
+          // Mark all notifications as visited when modal opens
+          const allNotificationIds = [];
+          try {
+            const booksResponse = await fetch(`${API_URL}/books/user`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (booksResponse.ok) {
+              const booksData = await booksResponse.json();
+              const userBooks = booksData.books || [];
+              
+              for (const book of userBooks) {
+                // Get likes
+                try {
+                  const likesResponse = await fetch(`${API_URL}/likes/${book._id}`, {
+                    headers: { Authorization: `Bearer ${token}` },
+                  });
+                  if (likesResponse.ok) {
+                    const likesData = await likesResponse.json();
+                    const likes = likesData.likes || [];
+                    likes.forEach((like) => {
+                      if (like.user?._id !== user?._id) {
+                        allNotificationIds.push(`like_${like._id}`);
+                      }
+                    });
+                  }
+                } catch (error) {
+                  console.error("Error:", error);
+                }
+                
+                // Get comments
+                try {
+                  const commentsResponse = await fetch(`${API_URL}/comments/${book._id}`, {
+                    headers: { Authorization: `Bearer ${token}` },
+                  });
+                  if (commentsResponse.ok) {
+                    const commentsData = await commentsResponse.json();
+                    const comments = commentsData.comments || [];
+                    comments.forEach((comment) => {
+                      if (comment.user?._id !== user?._id && !comment.parentComment) {
+                        allNotificationIds.push(`comment_${comment._id}`);
+                      }
+                    });
+                  }
+                } catch (error) {
+                  console.error("Error:", error);
+                }
+              }
+              
+              await markNotificationsAsVisited(allNotificationIds);
+              await fetchNotificationCount();
+            }
+          } catch (error) {
+            console.error("Error marking notifications as visited:", error);
+          }
+        }}
       />
     </View>
   );
