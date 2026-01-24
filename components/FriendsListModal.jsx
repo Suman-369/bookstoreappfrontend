@@ -22,31 +22,48 @@ export default function FriendsListModal({ visible, onClose, userId }) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (visible && userId) {
+    if (visible && token) {
       fetchFriends();
+    } else if (visible && !token) {
+      setFriends([]);
+      setLoading(false);
     }
-  }, [visible, userId]);
+  }, [visible, userId, token, currentUser?._id]);
 
   const fetchFriends = async () => {
     setLoading(true);
     try {
-      // If viewing another user's profile, get their friends
-      const endpoint = userId && userId !== currentUser?._id 
-        ? `${API_URL}/friends/list/${userId}`
-        : `${API_URL}/friends/list`;
+      if (!token) {
+        setFriends([]);
+        return;
+      }
+      // If viewing another user's profile, get their friends; otherwise current user's list
+      const endpoint =
+        userId && userId !== currentUser?._id
+          ? `${API_URL}/friends/list/${userId}`
+          : `${API_URL}/friends/list`;
 
       const response = await fetch(endpoint, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
       if (!response.ok) {
-        throw new Error("Failed to fetch friends");
+        const errorBody = await response.text();
+        let message = "Failed to fetch friends";
+        try {
+          const parsed = JSON.parse(errorBody);
+          if (parsed?.message) message = parsed.message;
+        } catch (_) {}
+        console.warn(`Friends fetch failed (${response.status}):`, errorBody || message);
+        setFriends([]);
+        return;
       }
 
       const data = await response.json();
       setFriends(data.friends || []);
     } catch (error) {
-      console.error("Error fetching friends:", error);
+      console.error("Error fetching friends:", error?.message || error);
+      setFriends([]);
     } finally {
       setLoading(false);
     }

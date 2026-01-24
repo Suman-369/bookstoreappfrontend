@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
+import { useRouter } from "expo-router";
 import { useAuthStore } from "../store/authStore";
 import { API_URL } from "../constants/api";
 import COLORS from "../constants/colors";
@@ -17,6 +18,7 @@ import styles from "../assets/styles/likesModal.styles";
 
 export default function LikesModal({ visible, onClose, bookId }) {
   const { token } = useAuthStore();
+  const router = useRouter();
   const [likes, setLikes] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -44,8 +46,22 @@ export default function LikesModal({ visible, onClose, bookId }) {
     }
   };
 
+  const handleUserProfilePress = (userId) => {
+    if (userId) {
+      onClose(); // Close the modal first
+      router.push({
+        pathname: "/(tabs)/userProfile",
+        params: { userId },
+      });
+    }
+  };
+
   const renderLikeItem = ({ item }) => (
-    <View style={styles.likeItem}>
+    <TouchableOpacity
+      style={styles.likeItem}
+      onPress={() => handleUserProfilePress(item.user?._id)}
+      activeOpacity={0.7}
+    >
       <Image
         source={{ uri: item.user?.profileImg || "https://via.placeholder.com/40" }}
         style={styles.likeAvatar}
@@ -54,7 +70,7 @@ export default function LikesModal({ visible, onClose, bookId }) {
         <Text style={styles.likeUsername}>{item.user?.username || "User"}</Text>
         <Text style={styles.likeDate}>Liked {formatPublishDate(item.createdAt)}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 
   return (

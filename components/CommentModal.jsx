@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
+import { useRouter } from "expo-router";
 import { useAuthStore } from "../store/authStore";
 import { API_URL } from "../constants/api";
 import COLORS from "../constants/colors";
@@ -20,6 +21,7 @@ import styles from "../assets/styles/commentModal.styles";
 
 export default function CommentModal({ visible, onClose, bookId, onCommentAdded }) {
   const { token, user } = useAuthStore();
+  const router = useRouter();
   const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [commentText, setCommentText] = useState("");
@@ -112,6 +114,16 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
     }));
   };
 
+  const handleUserProfilePress = (userId) => {
+    if (userId) {
+      onClose(); // Close the modal first
+      router.push({
+        pathname: "/(tabs)/userProfile",
+        params: { userId },
+      });
+    }
+  };
+
   const handleDeleteComment = async (commentId) => {
     try {
       // Check if it's a top-level comment before deleting
@@ -138,13 +150,23 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
 
   const renderComment = ({ item }) => (
     <View style={styles.commentItem}>
-      <Image
-        source={{ uri: item.user?.profileImg || "https://via.placeholder.com/40" }}
-        style={styles.commentAvatar}
-      />
+      <TouchableOpacity
+        onPress={() => handleUserProfilePress(item.user?._id)}
+        activeOpacity={0.7}
+      >
+        <Image
+          source={{ uri: item.user?.profileImg || "https://via.placeholder.com/40" }}
+          style={styles.commentAvatar}
+        />
+      </TouchableOpacity>
       <View style={styles.commentContent}>
         <View style={styles.commentHeader}>
-          <Text style={styles.commentUsername}>{item.user?.username || "User"}</Text>
+          <TouchableOpacity
+            onPress={() => handleUserProfilePress(item.user?._id)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.commentUsername}>{item.user?.username || "User"}</Text>
+          </TouchableOpacity>
           <Text style={styles.commentDate}>{formatPublishDate(item.createdAt)}</Text>
         </View>
         <Text style={styles.commentText}>{item.text}</Text>
@@ -183,13 +205,23 @@ export default function CommentModal({ visible, onClose, bookId, onCommentAdded 
               <View style={styles.repliesContainer}>
                 {item.replies.map((reply) => (
                   <View key={reply._id} style={styles.replyItem}>
-                    <Image
-                      source={{ uri: reply.user?.profileImg || "https://via.placeholder.com/32" }}
-                      style={styles.replyAvatar}
-                    />
+                    <TouchableOpacity
+                      onPress={() => handleUserProfilePress(reply.user?._id)}
+                      activeOpacity={0.7}
+                    >
+                      <Image
+                        source={{ uri: reply.user?.profileImg || "https://via.placeholder.com/32" }}
+                        style={styles.replyAvatar}
+                      />
+                    </TouchableOpacity>
                     <View style={styles.replyContent}>
                       <View style={styles.commentHeader}>
-                        <Text style={styles.commentUsername}>{reply.user?.username || "User"}</Text>
+                        <TouchableOpacity
+                          onPress={() => handleUserProfilePress(reply.user?._id)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.commentUsername}>{reply.user?.username || "User"}</Text>
+                        </TouchableOpacity>
                         <Text style={styles.commentDate}>{formatPublishDate(reply.createdAt)}</Text>
                       </View>
                       <Text style={styles.commentText}>{reply.text}</Text>
