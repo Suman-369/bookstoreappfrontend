@@ -10,7 +10,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "vercel-build": "expo export",
-    "generate-icons": "node ./scripts/generate-icons.js"
+    "generate-icons": "node ./scripts/generate-icons.js",
+    "create-google-services": "node ./scripts/create-google-services.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
