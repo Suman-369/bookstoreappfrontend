@@ -9,22 +9,19 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      },
-      "prebuildCommand": "bash ./scripts/run-create-google-services.sh"
+      }
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      },
-      "prebuildCommand": "bash ./scripts/run-create-google-services.sh"
+      }
     },
     "production": {
       "autoIncrement": true,
       "android": {
         "buildType": "apk"
-      },
-      "prebuildCommand": "bash ./scripts/run-create-google-services.sh"
+      }
     }
   },
   "submit": {

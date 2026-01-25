@@ -11,7 +11,8 @@
     "lint": "expo lint",
     "vercel-build": "expo export",
     "generate-icons": "node ./scripts/generate-icons.js",
-    "create-google-services": "node ./scripts/create-google-services.js"
+    "create-google-services": "node ./scripts/create-google-services.js",
+    "eas-build-pre-install": "node ./scripts/create-google-services.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
