@@ -41,3 +41,7 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Firebase config files (should use EAS secrets)
+google-services.json
+google-services.plist

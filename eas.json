@@ -9,19 +9,22 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      }
+      },
+      "prebuildCommand": "node scripts/create-google-services.js"
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      }
+      },
+      "prebuildCommand": "node scripts/create-google-services.js"
     },
     "production": {
       "autoIncrement": true,
       "android": {
         "buildType": "apk"
-      }
+      },
+      "prebuildCommand": "node scripts/create-google-services.js"
     }
   },
   "submit": {

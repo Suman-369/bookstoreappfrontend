@@ -35,6 +35,46 @@ npm run reset-project
 
 This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
 
+## Firebase Setup (google-services.json)
+
+This project requires `google-services.json` for Android builds. The file is not tracked in git for security reasons.
+
+### For Local Development
+
+1. Download `google-services.json` from your Firebase Console
+2. Place it in the `mobile/` directory (same level as `app.json`)
+3. The file will be automatically ignored by git
+
+### For EAS Build
+
+The `google-services.json` file is automatically created during EAS builds from an EAS secret.
+
+**First-time setup:**
+
+1. Make sure you have the `google-services.json` file locally
+2. Create an EAS secret with the file content:
+
+   ```bash
+   # On macOS/Linux:
+   eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value "$(cat google-services.json)"
+   
+   # On Windows (PowerShell):
+   $content = Get-Content google-services.json -Raw
+   eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value $content
+   
+   # On Windows (CMD):
+   eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value "@google-services.json"
+   ```
+
+3. The build hook will automatically create the file during each build
+
+**To update the secret:**
+
+```bash
+eas secret:delete --scope project --name GOOGLE_SERVICES_JSON
+# Then create it again with the new content (see above)
+```
+
 ## Learn more
 
 To learn more about developing your project with Expo, look at the following resources:
