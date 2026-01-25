@@ -6,9 +6,9 @@ const PROJECT_ID = Constants.expoConfig?.extra?.eas?.projectId ?? "f09896fc-0276
 const PERMISSION_ASKED_KEY = "@notification_permission_asked";
 
 // Check if we're in Expo Go (where push notifications don't work)
+// In production builds, push notifications will work properly
 const isExpoGo = Constants.executionEnvironment === "storeClient" || 
-                 Constants.appOwnership === "expo" ||
-                 !Constants.isDevice;
+                 (Constants.appOwnership === "expo" && !Constants.isDevice);
 
 let Notifications = null;
 let handlerInitialized = false;
@@ -120,12 +120,19 @@ export async function requestNotificationPermissionsOnFirstLaunch() {
 }
 
 export async function registerForPushNotificationsAsync() {
-  // Skip push token registration in Expo Go, but allow local notifications
-  if (isExpoGo) return null;
+  // Skip push token registration only in Expo Go
+  // In production/development builds, push notifications will work
+  if (isExpoGo) {
+    console.log("Running in Expo Go - push notifications not available. Build an APK for full functionality.");
+    return null;
+  }
   
   try {
     const Notifs = await getNotifications();
-    if (!Notifs) return null;
+    if (!Notifs) {
+      console.warn("expo-notifications module not available");
+      return null;
+    }
 
     const { status: existing } = await Notifs.getPermissionsAsync();
     let final = existing;
@@ -136,7 +143,10 @@ export async function registerForPushNotificationsAsync() {
       final = status;
     }
     
-    if (final !== "granted") return null;
+    if (final !== "granted") {
+      console.warn("Notification permissions not granted");
+      return null;
+    }
     
     if (Platform.OS === "android") {
       try {
@@ -147,9 +157,11 @@ export async function registerForPushNotificationsAsync() {
           vibrationPattern: [0, 250, 250, 250],
           lightColor: "#1976D2",
           sound: "default",
+          enableVibrate: true,
+          showBadge: true,
         });
       } catch (e) {
-        // Ignore channel setup errors
+        console.warn("Error setting up notification channel:", e);
       }
     }
     
@@ -157,12 +169,18 @@ export async function registerForPushNotificationsAsync() {
       const tokenResult = await Notifs.getExpoPushTokenAsync({
         projectId: PROJECT_ID,
       });
-      return tokenResult?.data ?? null;
+      const token = tokenResult?.data ?? null;
+      if (token) {
+        console.log("Push token registered successfully");
+      }
+      return token;
     } catch (e) {
+      console.warn("Error getting push token:", e?.message || e);
       // Push tokens not available - that's okay, we'll use local notifications
       return null;
     }
   } catch (e) {
+    console.warn("Error in registerForPushNotificationsAsync:", e?.message || e);
     return null;
   }
 }

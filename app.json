@@ -15,11 +15,18 @@
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "backgroundImage": "./assets/images/android-icon-background.png"
-    
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "bookstore.com"
+      "package": "bookstore.com",
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "output": "static",
@@ -33,7 +40,8 @@
           "icon": "./assets/images/icon.png",
           "color": "#1976D2",
           "sounds": [],
-          "defaultChannel": "default"
+          "defaultChannel": "default",
+          "mode": "production"
         }
       ],
       [

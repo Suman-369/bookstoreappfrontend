@@ -41,6 +41,9 @@ export default StyleSheet.create({
   },
   list: {
     padding: 16,
+    flexGrow: 1,
+  },
+  listWrapper: {
     flex: 1,
   },
   convItem: {

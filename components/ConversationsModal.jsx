@@ -237,6 +237,7 @@ export default function ConversationsModal({ visible, onClose, onStartChat }) {
           </View>
         ) : (
           <FlatList
+            style={styles.listWrapper}
             data={list}
             renderItem={renderItem}
             keyExtractor={keyExtractor}
