@@ -8,7 +8,7 @@ import { formatMemberSince } from "../utils/dateUtils";
 import { API_URL } from "../constants/api";
 import COLORS from "../constants/colors";
 
-export default function ProfileHeader({ onFriendCountPress }) {
+export default function ProfileHeader({ onFriendCountPress, onMessagePress, unreadCount = 0 }) {
   const { user, token } = useAuthStore();
   const [friendCount, setFriendCount] = useState(0);
 
@@ -54,6 +54,25 @@ export default function ProfileHeader({ onFriendCountPress }) {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {onMessagePress && (
+        <View style={styles.msgButtonContainer}>
+          <TouchableOpacity
+            style={styles.msgButton}
+            onPress={onMessagePress}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chatbubble-outline" size={24} color={COLORS.primary} />
+            {unreadCount > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }

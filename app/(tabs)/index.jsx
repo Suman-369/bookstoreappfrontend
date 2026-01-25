@@ -8,10 +8,11 @@ import {
 } from "react-native";
 import { useAuthStore } from "../../store/authStore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 
 import { Image } from "expo-image";
-import { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { Video, ResizeMode } from "expo-av";
 
 import styles from "../../assets/styles/home.styles";
@@ -29,6 +30,7 @@ export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export default function Home() {
   const { token, user } = useAuthStore();
   const router = useRouter();
+  const params = useLocalSearchParams();
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -58,7 +60,7 @@ export default function Home() {
       if (refresh) setRefreshing(true);
       else if (pageNum === 1) setLoading(true);
 
-      const response = await fetch(`${API_URL}/books/all?page=${pageNum}&limit=2`, {
+      const response = await fetch(`${API_URL}/books/all?page=${pageNum}&limit=5`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -98,6 +100,194 @@ export default function Home() {
     };
     initialize();
   }, []);
+
+  // Handle scrolling to a specific book when navigated from profile
+  const checkAndScrollToBook = async () => {
+    try {
+      // Check both params and AsyncStorage for scrollToBookId
+      const storedBookId = await AsyncStorage.getItem("scrollToBookId");
+      const scrollToBookId = params?.scrollToBookId || storedBookId;
+      
+      if (!scrollToBookId) return;
+      
+      // Clear from AsyncStorage immediately to prevent multiple triggers
+      if (storedBookId) {
+        await AsyncStorage.removeItem("scrollToBookId");
+      }
+      
+      // Clear params if exists
+      if (params?.scrollToBookId) {
+        router.setParams({ scrollToBookId: undefined });
+      }
+      
+      if (books.length === 0) {
+        // If no books loaded yet, wait for them to load
+        return;
+      }
+      
+      const postIndex = books.findIndex((book) => book._id === scrollToBookId);
+      
+      if (postIndex !== -1 && flatListRef.current) {
+        // Wait a bit for the list to render, then scroll
+        setTimeout(() => {
+          try {
+            flatListRef.current?.scrollToIndex({
+              index: postIndex,
+              animated: true,
+              viewPosition: 0.1,
+            });
+          } catch (error) {
+            // If scrollToIndex fails, try scrollToOffset as fallback
+            try {
+              flatListRef.current?.scrollToOffset({
+                offset: postIndex * 500, // Approximate offset per item (increased for better accuracy)
+                animated: true,
+              });
+            } catch (offsetError) {
+              console.log("Scroll to offset also failed:", offsetError);
+            }
+          }
+        }, 600);
+      } else {
+        // Book not in current list, try to fetch it
+        try {
+          const response = await fetch(`${API_URL}/books/${scrollToBookId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (response.ok) {
+            const data = await response.json();
+            const book = data.book || data;
+            // Check if book already exists to avoid duplicates
+            const exists = books.some(b => b._id === book._id);
+            if (!exists) {
+              // Add to the beginning of the list
+              setBooks((prev) => [book, ...prev]);
+              // Scroll to the first item (the newly added book)
+              setTimeout(() => {
+                if (flatListRef.current) {
+                  try {
+                    flatListRef.current.scrollToIndex({
+                      index: 0,
+                      animated: true,
+                      viewPosition: 0.1,
+                    });
+                  } catch (error) {
+                    try {
+                      flatListRef.current.scrollToOffset({
+                        offset: 0,
+                        animated: true,
+                      });
+                    } catch (offsetError) {
+                      console.log("Could not scroll to book");
+                    }
+                  }
+                }
+              }, 800);
+            } else {
+              // Book exists, find and scroll to it
+              const existingIndex = books.findIndex((b) => b._id === book._id);
+              if (existingIndex !== -1 && flatListRef.current) {
+                setTimeout(() => {
+                  try {
+                    flatListRef.current.scrollToIndex({
+                      index: existingIndex,
+                      animated: true,
+                      viewPosition: 0.1,
+                    });
+                  } catch (error) {
+                    flatListRef.current.scrollToOffset({
+                      offset: existingIndex * 500,
+                      animated: true,
+                    });
+                  }
+                }, 600);
+              }
+            }
+          }
+        } catch (fetchError) {
+          console.log("Could not fetch book:", fetchError);
+        }
+      }
+    } catch (error) {
+      console.error("Error in checkAndScrollToBook:", error);
+    }
+  };
+
+  // Check when component mounts or when books/params change
+  useEffect(() => {
+    let mounted = true;
+    let retryTimer = null;
+    
+    const checkScroll = async () => {
+      if (!mounted) return;
+      
+      // Check AsyncStorage first
+      const storedBookId = await AsyncStorage.getItem("scrollToBookId");
+      const scrollToBookId = params?.scrollToBookId || storedBookId;
+      
+      if (scrollToBookId && books.length > 0) {
+        await checkAndScrollToBook();
+      } else if (scrollToBookId && books.length === 0) {
+        // If we have a bookId but no books loaded yet, wait a bit more
+        retryTimer = setTimeout(async () => {
+          if (mounted && books.length > 0) {
+            await checkAndScrollToBook();
+          }
+        }, 1500);
+      }
+    };
+    
+    const timer = setTimeout(checkScroll, 500); // Delay to ensure navigation is complete
+    
+    return () => {
+      mounted = false;
+      clearTimeout(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [params?.scrollToBookId, books.length, token]);
+
+  // Also check when screen comes into focus (for navigation from other tabs)
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+      let retryTimer = null;
+      let retryCount = 0;
+      const maxRetries = 5;
+      
+      const checkScrollOnFocus = async () => {
+        if (!mounted) return;
+        
+        // Check AsyncStorage when screen comes into focus
+        const storedBookId = await AsyncStorage.getItem("scrollToBookId");
+        const scrollToBookId = params?.scrollToBookId || storedBookId;
+        
+        if (scrollToBookId && books.length > 0) {
+          // Small delay to ensure screen is fully rendered
+          setTimeout(async () => {
+            if (mounted) {
+              await checkAndScrollToBook();
+            }
+          }, 400);
+        } else if (scrollToBookId && books.length === 0 && retryCount < maxRetries) {
+          // If we have a bookId but no books loaded yet, retry with exponential backoff
+          retryCount++;
+          retryTimer = setTimeout(async () => {
+            if (mounted) {
+              await checkScrollOnFocus();
+            }
+          }, 500 * retryCount); // 500ms, 1000ms, 1500ms, etc.
+        }
+      };
+      
+      const timer = setTimeout(checkScrollOnFocus, 300);
+      
+      return () => {
+        mounted = false;
+        clearTimeout(timer);
+        if (retryTimer) clearTimeout(retryTimer);
+      };
+    }, [books.length, params?.scrollToBookId, token])
+  );
 
   const loadVisitedNotifications = async () => {
     try {

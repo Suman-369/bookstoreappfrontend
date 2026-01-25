@@ -9,13 +9,16 @@ import {
   Alert,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_URL } from "../../constants/api";
 import { useAuthStore } from "../../store/authStore";
+import { useSocket } from "../../hooks/useSocket";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import COLORS from "../../constants/colors";
 import Loader from "../../components/Loader";
 import FriendsListModal from "../../components/FriendsListModal";
+import ChatModal from "../../components/ChatModal";
 import { formatMemberSince } from "../../utils/dateUtils";
 import styles from "../../assets/styles/userProfile.styles";
 
@@ -23,7 +26,8 @@ export default function UserProfile() {
   const { userId } = useLocalSearchParams();
   const { token, user: currentUser } = useAuthStore();
   const router = useRouter();
-  
+  const socketApi = useSocket(token);
+
   const [profileUser, setProfileUser] = useState(null);
   const [books, setBooks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -32,6 +36,8 @@ export default function UserProfile() {
   const [friendCount, setFriendCount] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [friendsModalVisible, setFriendsModalVisible] = useState(false);
+  const [chatModalUser, setChatModalUser] = useState(null);
+  const [navigatingToPost, setNavigatingToPost] = useState(false);
 
   useEffect(() => {
     if (userId) {
@@ -372,8 +378,55 @@ export default function UserProfile() {
     return stars;
   };
 
+  const handleBookPress = async (bookId) => {
+    if (!bookId || navigatingToPost) return;
+    
+    setNavigatingToPost(true);
+    
+    // Store the bookId in AsyncStorage for the home screen to pick up
+    try {
+      await AsyncStorage.setItem("scrollToBookId", bookId);
+      
+      // Navigate to home tab - use the root path which is the most reliable
+      // The index tab has href="/" so we can navigate to root
+      setTimeout(() => {
+        try {
+          // Try navigating to root path first (most reliable)
+          router.push("/");
+        } catch (error1) {
+          try {
+            // Fallback: Try with full tabs path
+            router.push("/(tabs)/index");
+          } catch (error2) {
+            try {
+              // Fallback: Try with navigate
+              router.navigate("/(tabs)/index");
+            } catch (error3) {
+              console.error("Navigation failed:", error3);
+              setNavigatingToPost(false);
+              Alert.alert("Error", "Failed to navigate. Please tap the Home tab manually.");
+            }
+          }
+        }
+      }, 150);
+      
+      // Reset loading state after navigation completes
+      setTimeout(() => {
+        setNavigatingToPost(false);
+      }, 2000);
+    } catch (error) {
+      console.error("Error navigating to post:", error);
+      setNavigatingToPost(false);
+      Alert.alert("Error", "Failed to navigate to post. Please try again.");
+    }
+  };
+
   const renderBookItem = ({ item }) => (
-    <View style={styles.bookItem}>
+    <TouchableOpacity 
+      style={styles.bookItem} 
+      onPress={() => handleBookPress(item._id)}
+      activeOpacity={0.7}
+    >
       <Image source={{ uri: item.image }} style={styles.bookImage} contentFit="cover" />
       <View style={styles.bookInfo}>
         <Text style={styles.bookTitle}>{item.title}</Text>
@@ -385,7 +438,7 @@ export default function UserProfile() {
           {new Date(item.createdAt).toLocaleDateString()}
         </Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 
   const handleRefresh = async () => {
@@ -394,7 +447,7 @@ export default function UserProfile() {
     setRefreshing(false);
   };
 
-  if (isLoading && !refreshing) return <Loader />;
+  if ((isLoading && !refreshing) || navigatingToPost) return <Loader />;
 
   if (!profileUser) {
     return (
@@ -413,6 +466,8 @@ export default function UserProfile() {
     );
   }
 
+  const canMessage = profileUser && currentUser?._id !== profileUser._id;
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -420,7 +475,23 @@ export default function UserProfile() {
           <Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Profile</Text>
-        <View style={{ width: 24 }} />
+        {canMessage ? (
+          <TouchableOpacity
+            onPress={() =>
+              setChatModalUser({
+                _id: profileUser._id,
+                username: profileUser.username,
+                profileImg: profileUser.profileImg,
+                email: profileUser.email,
+              })
+            }
+            style={{ padding: 4 }}
+          >
+            <Ionicons name="chatbubble-outline" size={24} color={COLORS.primary} />
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 24 }} />
+        )}
       </View>
 
       <View style={styles.profileHeader}>
@@ -479,6 +550,12 @@ export default function UserProfile() {
         visible={friendsModalVisible}
         onClose={() => setFriendsModalVisible(false)}
         userId={profileUser?._id || userId}
+      />
+      <ChatModal
+        visible={!!chatModalUser}
+        otherUser={chatModalUser}
+        onClose={() => setChatModalUser(null)}
+        socket={socketApi}
       />
     </View>
   );

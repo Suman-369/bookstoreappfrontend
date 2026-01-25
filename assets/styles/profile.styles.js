@@ -39,6 +39,34 @@ const styles = StyleSheet.create({
   profileInfo: {
     flex: 1,
   },
+  msgButtonContainer: {
+    position: "relative",
+    alignSelf: "flex-start",
+    marginTop: 4,
+  },
+  msgButton: {
+    padding: 8,
+    position: "relative",
+  },
+  unreadBadge: {
+    position: "absolute",
+    top: 2,
+    right: 2,
+    backgroundColor: "#FF3B30",
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: COLORS.cardBackground,
+  },
+  unreadBadgeText: {
+    color: COLORS.white,
+    fontSize: 10,
+    fontWeight: "700",
+  },
   username: {
     fontSize: 20,
     fontWeight: "700",

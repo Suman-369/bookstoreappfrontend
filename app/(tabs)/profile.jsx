@@ -9,17 +9,21 @@ import {
   RefreshControl,
 } from "react-native";
 import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_URL } from "../../constants/api";
 import { useAuthStore } from "../../store/authStore";
+import { useSocket } from "../../hooks/useSocket";
 import styles from "../../assets/styles/profile.styles";
 import ProfileHeader from "../../components/ProfileHeader";
 import FriendsListModal from "../../components/FriendsListModal";
+import ConversationsModal from "../../components/ConversationsModal";
+import ChatModal from "../../components/ChatModal";
 import LogoutButton from "../../components/LogoutButton";
 import { Ionicons } from "@expo/vector-icons";
 import COLORS from "../../constants/colors";
 import { Image } from "expo-image";
-import { sleep } from ".";
 import Loader from "../../components/Loader";
+import { scheduleLocalNotification } from "../../utils/notifications";
 
 export default function Profile() {
   const [books, setBooks] = useState([]);
@@ -27,8 +31,13 @@ export default function Profile() {
   const [refreshing, setRefreshing] = useState(false);
   const [deleteBookId, setDeleteBookId] = useState(null);
   const [friendsModalVisible, setFriendsModalVisible] = useState(false);
+  const [messagesModalVisible, setMessagesModalVisible] = useState(false);
+  const [chatModalUser, setChatModalUser] = useState(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [navigatingToPost, setNavigatingToPost] = useState(false);
 
   const { token, user } = useAuthStore();
+  const socketApi = useSocket(token);
 
   const router = useRouter();
 
@@ -54,7 +63,53 @@ export default function Profile() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+    fetchUnreadCount();
+    const interval = setInterval(fetchUnreadCount, 10000); // Refresh every 10s
+    return () => clearInterval(interval);
+  }, [token]);
+
+  // Listen for new messages globally to show notifications
+  useEffect(() => {
+    if (!socketApi?.on || !token) return;
+    
+    const handleNewMessage = (msg) => {
+      if (!msg?.sender || !msg?.receiver) return;
+      const receiverId = typeof msg.receiver === "object" ? msg.receiver._id : msg.receiver;
+      const senderId = typeof msg.sender === "object" ? msg.sender._id : msg.sender;
+      
+      // Only show notification if message is for current user and chat is not open
+      if (receiverId === user?._id && chatModalUser?._id !== senderId) {
+        const senderName = typeof msg.sender === "object" ? msg.sender.username : "Someone";
+        scheduleLocalNotification(
+          senderName,
+          msg.text?.length > 80 ? msg.text.slice(0, 77) + "…" : msg.text || "New message",
+          { type: "message", senderId: String(senderId), messageId: msg._id }
+        );
+        fetchUnreadCount(); // Refresh count
+      }
+    };
+    
+    socketApi.on("new_message", handleNewMessage);
+    return () => {
+      socketApi.off("new_message", handleNewMessage);
+    };
+  }, [socketApi, token, user?._id, chatModalUser?._id]);
+
+  const fetchUnreadCount = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_URL}/messages/conversations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const total = (data.conversations || []).reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+        setUnreadCount(total);
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
 
   const handleDeleteBook = async (bookId) => {
     try {
@@ -100,8 +155,55 @@ export default function Profile() {
     return stars;
   };
 
+  const handleBookPress = async (bookId) => {
+    if (!bookId || navigatingToPost) return;
+    
+    setNavigatingToPost(true);
+    
+    // Store the bookId in AsyncStorage for the home screen to pick up
+    try {
+      await AsyncStorage.setItem("scrollToBookId", bookId);
+      
+      // Navigate to home tab - use the root path which is the most reliable
+      // The index tab has href="/" so we can navigate to root
+      setTimeout(() => {
+        try {
+          // Try navigating to root path first (most reliable)
+          router.push("/");
+        } catch (error1) {
+          try {
+            // Fallback: Try with full tabs path
+            router.push("/(tabs)/index");
+          } catch (error2) {
+            try {
+              // Fallback: Try with navigate
+              router.navigate("/(tabs)/index");
+            } catch (error3) {
+              console.error("Navigation failed:", error3);
+              setNavigatingToPost(false);
+              Alert.alert("Error", "Failed to navigate. Please tap the Home tab manually.");
+            }
+          }
+        }
+      }, 150);
+      
+      // Reset loading state after navigation completes
+      setTimeout(() => {
+        setNavigatingToPost(false);
+      }, 2000);
+    } catch (error) {
+      console.error("Error navigating to post:", error);
+      setNavigatingToPost(false);
+      Alert.alert("Error", "Failed to navigate to post. Please try again.");
+    }
+  };
+
   const renderBookItem = ({ item }) => (
-    <View style={styles.bookItem}>
+    <TouchableOpacity 
+      style={styles.bookItem} 
+      onPress={() => handleBookPress(item._id)}
+      activeOpacity={0.7}
+    >
       <Image source={{ uri: item.image }} style={styles.bookImage} contentFit="cover" />
       <View style={styles.bookInfo}>
         <Text style={styles.bookTitle}>{item.title}</Text>
@@ -112,28 +214,46 @@ export default function Profile() {
         <Text style={styles.bookDate}>{new Date(item.createdAt).toLocaleDateString()}</Text>
       </View>
 
-      <TouchableOpacity style={styles.deleteButton} onPress={() => confirmDelete(item._id)}>
+      <TouchableOpacity 
+        style={styles.deleteButton} 
+        onPress={(e) => {
+          e.stopPropagation();
+          confirmDelete(item._id);
+        }}
+      >
         {deleteBookId === item._id ? (
           <ActivityIndicator size="small" color={COLORS.primary} />
         ) : (
           <Ionicons name="trash-outline" size={20} color={COLORS.primary} />
         )}
       </TouchableOpacity>
-    </View>
+    </TouchableOpacity>
   );
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await sleep(500);
+    await new Promise((r) => setTimeout(r, 500));
     await fetchData();
     setRefreshing(false);
   };
 
-  if (isLoading && !refreshing) return <Loader />;
+  const handleStartChat = (user) => {
+    setMessagesModalVisible(false);
+    setChatModalUser(user);
+  };
+
+  if ((isLoading && !refreshing) || navigatingToPost) return <Loader />;
 
   return (
     <View style={styles.container}>
-      <ProfileHeader onFriendCountPress={() => setFriendsModalVisible(true)} />
+      <ProfileHeader
+        onFriendCountPress={() => setFriendsModalVisible(true)}
+        onMessagePress={() => {
+          setMessagesModalVisible(true);
+          fetchUnreadCount(); // Refresh when opening
+        }}
+        unreadCount={unreadCount}
+      />
       <LogoutButton />
 
       {/* YOUR RECOMMENDATIONS */}
@@ -170,6 +290,17 @@ export default function Profile() {
         visible={friendsModalVisible}
         onClose={() => setFriendsModalVisible(false)}
         userId={user?._id}
+      />
+      <ConversationsModal
+        visible={messagesModalVisible}
+        onClose={() => setMessagesModalVisible(false)}
+        onStartChat={handleStartChat}
+      />
+      <ChatModal
+        visible={!!chatModalUser}
+        otherUser={chatModalUser}
+        onClose={() => setChatModalUser(null)}
+        socket={socketApi}
       />
     </View>
   );
