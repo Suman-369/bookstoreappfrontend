@@ -68,6 +68,40 @@ export default function Profile() {
     return () => clearInterval(interval);
   }, [token]);
 
+  // Check if we should open a chat from a notification
+  useEffect(() => {
+    const checkAndOpenChat = async () => {
+      try {
+        const userIdToOpen = await AsyncStorage.getItem("@open_chat_with_user");
+        if (userIdToOpen) {
+          // Clear the flag
+          await AsyncStorage.removeItem("@open_chat_with_user");
+          
+          // Fetch user data and open chat
+          try {
+            const userResponse = await fetch(`${API_URL}/users/${userIdToOpen}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (userResponse.ok) {
+              const userData = await userResponse.json();
+              if (userData.user) {
+                setChatModalUser(userData.user);
+              }
+            }
+          } catch (e) {
+            console.warn("Failed to fetch user for chat:", e);
+          }
+        }
+      } catch (e) {
+        // Ignore errors
+      }
+    };
+    
+    if (token) {
+      checkAndOpenChat();
+    }
+  }, [token]);
+
   // Listen for new messages globally to show notifications
   useEffect(() => {
     if (!socketApi?.on || !token) return;

@@ -134,4 +134,16 @@ export default StyleSheet.create({
     color: COLORS.textSecondary,
     textAlign: "center",
   },
+  typingIndicator: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: COLORS.cardBackground,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  typingText: {
+    fontSize: 13,
+    fontStyle: "italic",
+    color: COLORS.textSecondary,
+  },
 });

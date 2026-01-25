@@ -2,10 +2,15 @@ import { SplashScreen, Stack, useRouter, useSegments } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import SafeScreen from "../components/SafeScreen";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useAuthStore } from "../store/authStore";
 import { useFonts } from "expo-font";
-import { registerForPushNotificationsAsync, registerPushTokenWithBackend } from "../utils/notifications";
+import { 
+  registerForPushNotificationsAsync, 
+  registerPushTokenWithBackend,
+  requestNotificationPermissionsOnFirstLaunch,
+  setupNotificationResponseHandler
+} from "../utils/notifications";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -14,6 +19,7 @@ export default function RootLayout() {
   const segments = useSegments();
   const { checkAuth, user, token } = useAuthStore();
   const [isReady, setIsReady] = useState(false);
+  const notificationResponseSubscription = useRef(null);
 
   const fontMap = { "JetBrainsMono-Medium": require("../assets/fonts/JetBrainsMono-Medium.ttf") };
   const [fontLoaded] = useFonts(fontMap);
@@ -21,6 +27,32 @@ export default function RootLayout() {
   useEffect(() => {
     if (fontLoaded) SplashScreen.hideAsync();
   }, [fontLoaded]);
+
+  // Request notification permissions on first app launch
+  useEffect(() => {
+    const requestPermissions = async () => {
+      await requestNotificationPermissionsOnFirstLaunch();
+    };
+    requestPermissions();
+  }, []);
+
+  // Setup notification response handler (when user taps notification)
+  useEffect(() => {
+    const setupHandler = async () => {
+      const setupFn = setupNotificationResponseHandler(router);
+      const subscription = await setupFn();
+      if (subscription) {
+        notificationResponseSubscription.current = subscription;
+      }
+    };
+    setupHandler();
+
+    return () => {
+      if (notificationResponseSubscription.current && typeof notificationResponseSubscription.current.remove === "function") {
+        notificationResponseSubscription.current.remove();
+      }
+    };
+  }, [router]);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -30,11 +62,14 @@ export default function RootLayout() {
     initAuth();
   }, []);
 
+  // Register push token when user logs in
   useEffect(() => {
     if (!token || !user) return;
     (async () => {
       const pushToken = await registerForPushNotificationsAsync();
-      if (pushToken) await registerPushTokenWithBackend(pushToken, token);
+      if (pushToken) {
+        await registerPushTokenWithBackend(pushToken, token);
+      }
     })();
   }, [token, user]);
 

@@ -128,6 +128,10 @@ export default function Home() {
       const postIndex = books.findIndex((book) => book._id === scrollToBookId);
       
       if (postIndex !== -1 && flatListRef.current) {
+        // Check if we should open comments after scrolling
+        const shouldOpenComments = await AsyncStorage.getItem("@open_comments_for_book");
+        const openCommentsForThisBook = shouldOpenComments === scrollToBookId;
+        
         // Wait a bit for the list to render, then scroll
         setTimeout(() => {
           try {
@@ -136,6 +140,15 @@ export default function Home() {
               animated: true,
               viewPosition: 0.1,
             });
+            
+            // If we should open comments, do it after scrolling
+            if (openCommentsForThisBook) {
+              setTimeout(async () => {
+                setSelectedBookId(scrollToBookId);
+                setCommentModalVisible(true);
+                await AsyncStorage.removeItem("@open_comments_for_book");
+              }, 800);
+            }
           } catch (error) {
             // If scrollToIndex fails, try scrollToOffset as fallback
             try {
@@ -143,6 +156,15 @@ export default function Home() {
                 offset: postIndex * 500, // Approximate offset per item (increased for better accuracy)
                 animated: true,
               });
+              
+              // If we should open comments, do it after scrolling
+              if (openCommentsForThisBook) {
+                setTimeout(async () => {
+                  setSelectedBookId(scrollToBookId);
+                  setCommentModalVisible(true);
+                  await AsyncStorage.removeItem("@open_comments_for_book");
+                }, 800);
+              }
             } catch (offsetError) {
               console.log("Scroll to offset also failed:", offsetError);
             }
@@ -162,6 +184,11 @@ export default function Home() {
             if (!exists) {
               // Add to the beginning of the list
               setBooks((prev) => [book, ...prev]);
+              
+              // Check if we should open comments
+              const shouldOpenComments = await AsyncStorage.getItem("@open_comments_for_book");
+              const openCommentsForThisBook = shouldOpenComments === scrollToBookId;
+              
               // Scroll to the first item (the newly added book)
               setTimeout(() => {
                 if (flatListRef.current) {
@@ -171,12 +198,30 @@ export default function Home() {
                       animated: true,
                       viewPosition: 0.1,
                     });
+                    
+                    // If we should open comments, do it after scrolling
+                    if (openCommentsForThisBook) {
+                      setTimeout(async () => {
+                        setSelectedBookId(scrollToBookId);
+                        setCommentModalVisible(true);
+                        await AsyncStorage.removeItem("@open_comments_for_book");
+                      }, 800);
+                    }
                   } catch (error) {
                     try {
                       flatListRef.current.scrollToOffset({
                         offset: 0,
                         animated: true,
                       });
+                      
+                      // If we should open comments, do it after scrolling
+                      if (openCommentsForThisBook) {
+                        setTimeout(async () => {
+                          setSelectedBookId(scrollToBookId);
+                          setCommentModalVisible(true);
+                          await AsyncStorage.removeItem("@open_comments_for_book");
+                        }, 800);
+                      }
                     } catch (offsetError) {
                       console.log("Could not scroll to book");
                     }
@@ -187,6 +232,10 @@ export default function Home() {
               // Book exists, find and scroll to it
               const existingIndex = books.findIndex((b) => b._id === book._id);
               if (existingIndex !== -1 && flatListRef.current) {
+                // Check if we should open comments
+                const shouldOpenComments = await AsyncStorage.getItem("@open_comments_for_book");
+                const openCommentsForThisBook = shouldOpenComments === scrollToBookId;
+                
                 setTimeout(() => {
                   try {
                     flatListRef.current.scrollToIndex({
@@ -194,11 +243,29 @@ export default function Home() {
                       animated: true,
                       viewPosition: 0.1,
                     });
+                    
+                    // If we should open comments, do it after scrolling
+                    if (openCommentsForThisBook) {
+                      setTimeout(async () => {
+                        setSelectedBookId(scrollToBookId);
+                        setCommentModalVisible(true);
+                        await AsyncStorage.removeItem("@open_comments_for_book");
+                      }, 800);
+                    }
                   } catch (error) {
                     flatListRef.current.scrollToOffset({
                       offset: existingIndex * 500,
                       animated: true,
                     });
+                    
+                    // If we should open comments, do it after scrolling
+                    if (openCommentsForThisBook) {
+                      setTimeout(async () => {
+                        setSelectedBookId(scrollToBookId);
+                        setCommentModalVisible(true);
+                        await AsyncStorage.removeItem("@open_comments_for_book");
+                      }, 800);
+                    }
                   }
                 }, 600);
               }

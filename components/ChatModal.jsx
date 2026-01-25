@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
@@ -29,7 +30,11 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
   const [sending, setSending] = useState(false);
   const [isOnline, setIsOnline] = useState(false);
   const [lastSeen, setLastSeen] = useState(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const [isOtherTyping, setIsOtherTyping] = useState(false);
   const listRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const markReadTimeoutRef = useRef(null);
 
   const currentUserId = currentUser?._id;
 
@@ -53,12 +58,47 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     }
   }, [otherUser?._id, token]);
 
+  // Mark messages as read periodically when chat is visible
+  useEffect(() => {
+    if (visible && otherUser?._id && socket?.emit) {
+      // Mark as read immediately when chat opens
+      const markRead = () => {
+        socket.emit("mark_messages_read", { otherUserId: otherUser._id });
+      };
+      
+      // Initial mark after messages load
+      markReadTimeoutRef.current = setTimeout(markRead, 500);
+      
+      // Mark as read periodically while chat is visible (every 2 seconds)
+      const readInterval = setInterval(markRead, 2000);
+      
+      return () => {
+        if (markReadTimeoutRef.current) {
+          clearTimeout(markReadTimeoutRef.current);
+        }
+        clearInterval(readInterval);
+      };
+    }
+  }, [visible, otherUser?._id, socket]);
+
   useEffect(() => {
     if (visible && otherUser?._id) {
       setInputText("");
       fetchMessages();
     }
   }, [visible, otherUser?._id, fetchMessages]);
+
+  // Cleanup typing indicator when chat closes
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      if (isTyping && socket?.emit && otherUser?._id) {
+        socket.emit("typing_stop", { receiverId: otherUser._id });
+      }
+    };
+  }, [visible, isTyping, socket, otherUser?._id]);
 
   const fetchOnlineStatus = useCallback(async () => {
     if (!otherUser?._id || !token) return;
@@ -144,13 +184,18 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         );
       }
       
+      // If message is from other user and chat is visible, mark as read immediately
+      if (isFromOtherUser && visible && socket?.emit) {
+        socket.emit("mark_messages_read", { otherUserId: otherUser._id });
+      }
+      
       setMessages((prev) => {
         const exists = prev.some((m) => m._id === msg._id);
         if (exists) return prev;
         return [...prev, msg];
       });
     },
-    [otherUser?._id, currentUserId, visible]
+    [otherUser?._id, currentUserId, visible, socket]
   );
 
   const handleMessagesRead = useCallback(({ messageIds }) => {
@@ -163,21 +208,76 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     );
   }, []);
 
+  const handleMessageDeleted = useCallback(({ messageId }) => {
+    setMessages((prev) => prev.filter((m) => m._id !== messageId));
+  }, []);
+
+  const handleTypingStart = useCallback(({ userId: typingUserId }) => {
+    if (typingUserId === otherUser?._id) {
+      setIsOtherTyping(true);
+    }
+  }, [otherUser?._id]);
+
+  const handleTypingStop = useCallback(({ userId: typingUserId }) => {
+    if (typingUserId === otherUser?._id) {
+      setIsOtherTyping(false);
+    }
+  }, [otherUser?._id]);
+
   useEffect(() => {
     if (!socket || !visible) return;
     socket.on("new_message", handleNewMessage);
     socket.on("messages_read", handleMessagesRead);
+    socket.on("message_deleted", handleMessageDeleted);
+    socket.on("typing_start", handleTypingStart);
+    socket.on("typing_stop", handleTypingStop);
     return () => {
       socket.off("new_message", handleNewMessage);
       socket.off("messages_read", handleMessagesRead);
+      socket.off("message_deleted", handleMessageDeleted);
+      socket.off("typing_start", handleTypingStart);
+      socket.off("typing_stop", handleTypingStop);
     };
-  }, [socket, visible, handleNewMessage, handleMessagesRead]);
+  }, [socket, visible, handleNewMessage, handleMessagesRead, handleMessageDeleted, handleTypingStart, handleTypingStop]);
+
+  // Handle typing indicator
+  const handleInputChange = useCallback((text) => {
+    setInputText(text);
+    
+    // Emit typing_start when user starts typing
+    if (!isTyping && socket?.emit && otherUser?._id) {
+      setIsTyping(true);
+      socket.emit("typing_start", { receiverId: otherUser._id });
+    }
+    
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    // Emit typing_stop after 2 seconds of no typing
+    typingTimeoutRef.current = setTimeout(() => {
+      if (socket?.emit && otherUser?._id) {
+        setIsTyping(false);
+        socket.emit("typing_stop", { receiverId: otherUser._id });
+      }
+    }, 2000);
+  }, [isTyping, socket, otherUser?._id]);
 
   const sendMessage = async () => {
     const trimmed = inputText.trim();
     if (!trimmed || !otherUser?._id || sending) return;
     setInputText("");
     setSending(true);
+    
+    // Stop typing indicator
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    if (isTyping && socket?.emit) {
+      setIsTyping(false);
+      socket.emit("typing_stop", { receiverId: otherUser._id });
+    }
 
     const addMessage = (msg) => {
       setMessages((prev) => {
@@ -229,17 +329,67 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     }
   };
 
+  const handleDeleteMessage = useCallback(async (messageId) => {
+    Alert.alert(
+      "Delete Message",
+      "Are you sure you want to delete this message?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              if (socket?.emit) {
+                socket.emit("delete_message", { messageId }, (err) => {
+                  if (err) {
+                    // Fallback to API
+                    deleteViaApi();
+                  }
+                });
+              } else {
+                deleteViaApi();
+              }
+            } catch (e) {
+              console.error("Delete error:", e);
+            }
+          },
+        },
+      ]
+    );
+
+    async function deleteViaApi() {
+      try {
+        const res = await fetch(`${API_URL}/messages/${messageId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error("Failed to delete");
+        setMessages((prev) => prev.filter((m) => m._id !== messageId));
+      } catch (e) {
+        Alert.alert("Error", "Failed to delete message");
+      }
+    }
+  }, [socket, token]);
+
   const renderMessage = ({ item }) => {
     const isSent =
       (typeof item.sender === "object" ? item.sender._id : item.sender) ===
       currentUserId;
     const read = !!item.read;
     return (
-      <View
+      <TouchableOpacity
         style={[
           styles.messageBubble,
           isSent ? styles.bubbleSent : styles.bubbleReceived,
         ]}
+        onLongPress={() => {
+          // Only allow deletion of own messages
+          if (isSent) {
+            handleDeleteMessage(item._id);
+          }
+        }}
+        activeOpacity={0.7}
       >
         <Text
           style={[
@@ -273,12 +423,12 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
             <Ionicons
               name={read ? "checkmark-done" : "checkmark"}
               size={16}
-              color={read ? "#4CAF50" : "#90A4AE"}
+              color={read ? "#4FC3F7" : "rgba(255,255,255,0.7)"}
               style={styles.tickIcon}
             />
           )}
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -385,18 +535,26 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                 />
                 <Text style={styles.emptyText}>No messages yet</Text>
                 <Text style={styles.emptyText}>
-                  Say hi to {otherUser.username}!
+                  Say Hi to {otherUser.username} 🤗 !
                 </Text>
               </View>
             }
           />
         )}
 
+        {isOtherTyping && (
+          <View style={styles.typingIndicator}>
+            <Text style={styles.typingText}>
+              {otherUser?.username || "Someone"} is typing...
+            </Text>
+          </View>
+        )}
+
         <View style={styles.inputRow}>
           <TextInput
             style={styles.input}
             value={inputText}
-            onChangeText={setInputText}
+            onChangeText={handleInputChange}
             placeholder="Message..."
             placeholderTextColor={COLORS.placeholderText}
             multiline
