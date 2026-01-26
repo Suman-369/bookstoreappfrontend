@@ -76,7 +76,7 @@ export async function requestNotificationPermissionsOnFirstLaunch() {
       // Show a friendly message before requesting
       Alert.alert(
         "Enable Notifications",
-        "Stay updated! Get notified when someone likes your posts, comments, sends you a friend request, or messages you.",
+        "Stay updated! Get notified when friends post, someone likes or comments on your posts, sends you a friend request, or messages you.",
         [
           {
             text: "Not Now",
@@ -95,7 +95,7 @@ export async function requestNotificationPermissionsOnFirstLaunch() {
                 try {
                   await Notifs.setNotificationChannelAsync("default", {
                     name: "Your Meme's Notifications",
-                    description: "Notifications for likes, comments, friend requests, and messages",
+                    description: "Notifications for new posts, likes, comments, friend requests, and messages",
                     importance: Notifs.AndroidImportance.MAX,
                     vibrationPattern: [0, 250, 250, 250],
                     lightColor: "#1976D2",
@@ -320,6 +320,16 @@ function handleNotificationTap(response, router) {
             // Ignore storage errors
           }
           router.push("/(tabs)/profile");
+        }
+        break;
+
+      case "post":
+        // Navigate to the new post
+        if (data.bookId) {
+          router.push({
+            pathname: "/(tabs)/index",
+            params: { scrollToBookId: data.bookId },
+          });
         }
         break;
 
