@@ -12,6 +12,7 @@ import {
   Alert,
   Animated,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
@@ -23,10 +24,32 @@ import COLORS from "../constants/colors";
 import styles from "../assets/styles/chatModal.styles";
 import { scheduleLocalNotification } from "../utils/notifications";
 import { formatLastSeen } from "../utils/dateUtils";
+import { encryptMessageE2EE, decryptMessageE2EE } from "../utils/cryptoUtils";
+import useKeyStorage from "../hooks/useKeyStorage";
+import { useRecipientPublicKeyStore } from "../store/recipientPublicKeyStore";
+import {
+  playSendSound,
+  playReceiveSound,
+  initializeSounds,
+} from "../utils/soundUtils";
 
 export default function ChatModal({ visible, otherUser, onClose, socket }) {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const { token, user: currentUser } = useAuthStore();
+  const {
+    publicKey: myPublicKey,
+    secretKey: mySecretKey,
+    isInitialized: keysInitialized,
+    getKeys,
+  } = useKeyStorage();
+
+  // Use recipient public key store
+  const { fetchRecipientPublicKey: fetchFromStore } =
+    useRecipientPublicKeyStore();
+  const [otherUserPublicKey, setOtherUserPublicKey] = useState(null);
+  const [recipientKeyLoading, setRecipientKeyLoading] = useState(false);
+  const [publicKeyError, setPublicKeyError] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -65,14 +88,119 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       const list = data.messages || [];
-      setMessages(list);
+
+      // Decrypt messages that are encrypted
+      const decryptedMessages = list.map((msg) => {
+        if (
+          msg.isEncrypted &&
+          msg.encryptedMessage &&
+          msg.encryptedSymmetricKey &&
+          msg.nonce
+        ) {
+          try {
+            // Get sender's public key - prefer from message object, fallback to cached
+            let senderPublicKey =
+              typeof msg.sender === "object" ? msg.sender.publicKey : null;
+
+            // If not in message object, use cached recipient key (for messages from other user)
+            const isFromOtherUser =
+              (typeof msg.sender === "object" ? msg.sender._id : msg.sender) !==
+              currentUserId;
+            if (!senderPublicKey && isFromOtherUser) {
+              senderPublicKey = otherUserPublicKey;
+            }
+
+            // If still no key, can't decrypt
+            if (!senderPublicKey || !mySecretKey) {
+              return {
+                ...msg,
+                text: "🔒 Unable to decrypt message - missing keys",
+                isDecrypted: false,
+              };
+            }
+
+            const decryptedText = decryptMessageE2EE(
+              msg.encryptedMessage,
+              msg.encryptedSymmetricKey,
+              msg.nonce,
+              senderPublicKey,
+              mySecretKey,
+            );
+
+            // CRITICAL: If decryption returns null/undefined, do NOT render empty message
+            if (!decryptedText || decryptedText.length === 0) {
+              return {
+                ...msg,
+                text: "🔒 Unable to decrypt message - decryption failed",
+                isDecrypted: false,
+              };
+            } else {
+              return {
+                ...msg,
+                text: decryptedText,
+                isDecrypted: true,
+              };
+            }
+          } catch (error) {
+            return {
+              ...msg,
+              text: "🔒 Unable to decrypt message - error occurred",
+              isDecrypted: false,
+            };
+          }
+        }
+        return msg;
+      });
+
+      setMessages(decryptedMessages);
     } catch (e) {
-      console.error("Messages fetch:", e);
       setMessages([]);
     } finally {
       setLoading(false);
     }
-  }, [otherUser?._id, token]);
+  }, [otherUser?._id, token, mySecretKey, otherUserPublicKey]);
+
+  // Fetch recipient's public key with retry logic
+  const fetchRecipientPublicKey = useCallback(
+    async (forceRefresh = false) => {
+      if (!otherUser?._id || !token) return false;
+
+      try {
+        setRecipientKeyLoading(true);
+        setPublicKeyError(null);
+
+        const publicKey = await fetchFromStore(otherUser._id, token, {
+          maxRetries: 3,
+          retryDelay: 500,
+        });
+
+        setOtherUserPublicKey(publicKey);
+        return true;
+      } catch (error) {
+        // Distinguish between different error types
+        if (error.isE2EENotSetup) {
+          setPublicKeyError(
+            "This user hasn't set up end-to-end encryption yet.",
+          );
+        } else if (error.statusCode === 404) {
+          setPublicKeyError("User not found");
+        } else {
+          // Network error or other issue
+          setPublicKeyError(
+            "Unable to reach recipient's encryption key. Please try again.",
+          );
+        }
+        setOtherUserPublicKey(null);
+        return false;
+      } finally {
+        setRecipientKeyLoading(false);
+      }
+    },
+    [otherUser?._id, token, fetchFromStore],
+  );
+
+  // Keys are uploaded automatically by useKeyStorage hook on initialization
+  // No need to upload again here
 
   // Mark messages as read periodically when chat is visible
   useEffect(() => {
@@ -97,6 +225,13 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     }
   }, [visible, otherUser?._id, socket]);
 
+  // Fetch recipient's public key when chat opens
+  useEffect(() => {
+    if (visible && keysInitialized) {
+      fetchRecipientPublicKey();
+    }
+  }, [visible, keysInitialized, fetchRecipientPublicKey]);
+
   useEffect(() => {
     if (visible && otherUser?._id) {
       setInputText("");
@@ -120,7 +255,6 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                 "Cannot unload a Recording that has already been unloaded",
               )
             ) {
-              console.error("Recording cleanup error:", err);
             }
           })
           .finally(() => {
@@ -152,6 +286,18 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     };
   }, []);
 
+  // Initialize sounds on component mount
+  useEffect(() => {
+    const initSounds = async () => {
+      try {
+        await initializeSounds();
+      } catch (error) {
+        console.warn("Failed to initialize chat sounds:", error);
+      }
+    };
+    initSounds();
+  }, []);
+
   const checkBlockedStatus = useCallback(async () => {
     if (!otherUser?._id || !token) return;
     try {
@@ -165,9 +311,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         );
         setIsBlocked(blockedIds.includes(String(otherUser._id)));
       }
-    } catch (e) {
-      console.error("Check blocked status:", e);
-    }
+    } catch (e) {}
   }, [otherUser?._id, token]);
 
   // Cleanup typing indicator when chat closes
@@ -256,17 +400,84 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
 
       if (!isFromOtherUser && !isFromCurrentUser) return;
 
+      // Decrypt message if it's encrypted
+      let messageToAdd = msg;
+      if (
+        msg.isEncrypted &&
+        msg.encryptedMessage &&
+        msg.encryptedSymmetricKey &&
+        msg.nonce
+      ) {
+        try {
+          // Get sender's public key - prefer from message object, fallback to cached
+          let senderPublicKey =
+            typeof msg.sender === "object" ? msg.sender.publicKey : null;
+
+          // If not in message object, use cached recipient key (for messages from other user)
+          if (!senderPublicKey && isFromOtherUser) {
+            senderPublicKey = otherUserPublicKey;
+          }
+
+          // If still no key, can't decrypt
+          if (!senderPublicKey || !mySecretKey) {
+            messageToAdd = {
+              ...msg,
+              text: "🔒 Unable to decrypt message - missing keys",
+              isDecrypted: false,
+            };
+          } else {
+            const decryptedText = decryptMessageE2EE(
+              msg.encryptedMessage,
+              msg.encryptedSymmetricKey,
+              msg.nonce,
+              senderPublicKey,
+              mySecretKey,
+            );
+
+            // CRITICAL: If decryption returns null/undefined, do NOT render empty message
+            if (!decryptedText || decryptedText.length === 0) {
+              console.error("❌ Decryption failed - returned empty result");
+              messageToAdd = {
+                ...msg,
+                text: "🔒 Unable to decrypt message - decryption failed",
+                isDecrypted: false,
+              };
+            } else {
+              messageToAdd = {
+                ...msg,
+                text: decryptedText,
+                isDecrypted: true,
+              };
+            }
+          }
+        } catch (error) {
+          messageToAdd = {
+            ...msg,
+            text: "🔒 Unable to decrypt message - error occurred",
+            isDecrypted: false,
+          };
+        }
+      }
+
       // Show local notification only if message is from other user and chat is not visible
       if (isFromOtherUser && !visible) {
         const senderName =
           typeof msg.sender === "object" ? msg.sender.username : "Someone";
-        scheduleLocalNotification(
-          senderName,
-          msg.text?.length > 80
-            ? msg.text.slice(0, 77) + "…"
-            : msg.text || "New message",
-          { type: "message", senderId: String(senderId), messageId: msg._id },
-        );
+        const notificationBody = msg.isEncrypted
+          ? "🔒 Encrypted message"
+          : messageToAdd.text?.length > 80
+            ? messageToAdd.text.slice(0, 77) + "…"
+            : messageToAdd.text || "New message";
+        scheduleLocalNotification(senderName, notificationBody, {
+          type: "message",
+          senderId: String(senderId),
+          messageId: msg._id,
+        });
+      }
+
+      // Play receive sound if message is from other user and chat is visible
+      if (isFromOtherUser && visible) {
+        playReceiveSound();
       }
 
       // If message is from other user and chat is visible, mark as read immediately
@@ -277,10 +488,17 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       setMessages((prev) => {
         const exists = prev.some((m) => m._id === msg._id);
         if (exists) return prev;
-        return [...prev, msg];
+        return [...prev, messageToAdd];
       });
     },
-    [otherUser?._id, currentUserId, visible, socket],
+    [
+      otherUser?._id,
+      currentUserId,
+      visible,
+      socket,
+      mySecretKey,
+      otherUserPublicKey,
+    ],
   );
 
   const handleMessagesRead = useCallback(({ messageIds }) => {
@@ -408,28 +626,97 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       }, 50);
     };
 
-    if (socket?.emit) {
-      socket.emit(
-        "send_message",
-        { receiverId: otherUser._id, text: messageText },
-        (err, saved) => {
-          if (!err && saved) {
-            addMessage(saved);
-          } else if (err) {
-            setInputText(messageText);
-            // Show error message if it's a blocking-related error
-            if (
-              err.message &&
-              (err.message.includes("blocked") ||
-                err.message.includes("cannot send"))
-            ) {
-              Alert.alert("Error", err.message);
-            } else {
-              sendViaApi();
-            }
-          }
-        },
+    // STEP 1: Validate sender's own keys
+    if (!keysInitialized || !mySecretKey || !myPublicKey) {
+      setInputText(messageText);
+      Alert.alert(
+        "Error",
+        "E2EE keys not initialized. Please close and reopen chat.",
       );
+      return;
+    }
+
+    // STEP 2: Fetch recipient's public key if not cached
+    let recipientKey = otherUserPublicKey;
+
+    if (!recipientKey) {
+      const keyFetched = await fetchRecipientPublicKey(false);
+      if (keyFetched) {
+        recipientKey = otherUserPublicKey;
+      } else {
+        // DO NOT SEND PLAINTEXT - BLOCK THE MESSAGE
+        setInputText(messageText);
+        Alert.alert(
+          "❌ Encryption Not Available",
+          "This user hasn't set up end-to-end encryption yet. You cannot send messages until they enable E2EE.\n\nAsk them to open the app to set up encryption.",
+        );
+        return;
+      }
+    }
+
+    if (!recipientKey) {
+      setInputText(messageText);
+      Alert.alert(
+        "❌ Encryption Not Available",
+        "Unable to send message - recipient encryption key not available.",
+      );
+      return;
+    }
+
+    // STEP 3: Encrypt message with recipient's public key
+    let messagePayload;
+
+    try {
+      const { encryptedMessage, encryptedSymmetricKey, nonce } =
+        encryptMessageE2EE(messageText, recipientKey, mySecretKey);
+
+      messagePayload = {
+        receiverId: otherUser._id,
+        encryptedMessage,
+        encryptedSymmetricKey,
+        nonce,
+        isEncrypted: true,
+      };
+    } catch (error) {
+      setInputText(messageText);
+      Alert.alert("Error", "Failed to encrypt message: " + error.message);
+      return;
+    }
+
+    // Play send sound
+    playSendSound();
+
+    // STEP 4: Send encrypted message via socket (with API fallback for delivery only)
+    if (socket?.emit) {
+      socket.emit("send_message", messagePayload, (err, saved) => {
+        if (!err && saved) {
+          // Decrypt the message for display (we know the plaintext)
+          let displayMessage = saved;
+          if (saved.isEncrypted && saved.encryptedMessage) {
+            displayMessage = {
+              ...saved,
+              text: messageText, // We know the plaintext
+            };
+          }
+          addMessage(displayMessage);
+        } else if (err) {
+          setInputText(messageText);
+          // Only fallback to API for network issues, not for E2EE errors
+          if (
+            err.message &&
+            (err.message.includes("E2EE") ||
+              err.message.includes("PLAINTEXT") ||
+              err.message.includes("Encryption") ||
+              err.message.includes("cannot send"))
+          ) {
+            // Critical E2EE error - do not retry
+            Alert.alert("Error", err.message);
+          } else {
+            // Network error - try API
+            sendViaApi();
+          }
+        }
+      });
     } else {
       sendViaApi();
     }
@@ -442,28 +729,25 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            receiverId: otherUser._id,
-            text: messageText,
-          }),
+          body: JSON.stringify(messagePayload),
         });
         const data = await res.json();
         if (res.ok && data.message) {
-          addMessage(data.message);
+          let displayMessage = data.message;
+          if (displayMessage.isEncrypted && displayMessage.encryptedMessage) {
+            displayMessage = {
+              ...displayMessage,
+              text: messageText,
+            };
+          }
+          addMessage(displayMessage);
         } else {
           setInputText(messageText);
-          // Show error message if it's a blocking-related error
-          if (
-            data.message &&
-            (data.message.includes("blocked") ||
-              data.message.includes("cannot send"))
-          ) {
-            Alert.alert("Error", data.message);
-          }
+          Alert.alert("Error", data.message || "Failed to send message");
         }
-      } catch (e) {
+      } catch (error) {
         setInputText(messageText);
-        console.error("Send message error:", e);
+        Alert.alert("Error", "Network error: " + error.message);
       }
     }
   };
@@ -490,9 +774,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                 } else {
                   deleteViaApi();
                 }
-              } catch (e) {
-                console.error("Delete error:", e);
-              }
+              } catch (e) {}
             },
           },
         ],
@@ -542,7 +824,6 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                 Alert.alert("Error", data.message || "Failed to clear chat");
               }
             } catch (e) {
-              console.error("Clear chat error:", e);
               Alert.alert("Error", "Failed to clear chat");
             }
           },
@@ -556,7 +837,10 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       // Request permissions
       const { status } = await Audio.requestPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Permission Required", "Please allow microphone access to record voice messages.");
+        Alert.alert(
+          "Permission Required",
+          "Please allow microphone access to record voice messages.",
+        );
         return;
       }
 
@@ -567,9 +851,9 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       });
 
       const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
       );
-      
+
       setRecording(newRecording);
       setIsRecording(true);
       setIsRecordingPaused(false);
@@ -581,7 +865,6 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         setRecordingDuration((prev) => prev + 1);
       }, 1000);
     } catch (err) {
-      console.error("Failed to start recording", err);
       Alert.alert("Error", "Failed to start recording");
     }
   };
@@ -605,14 +888,16 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
 
       // If recording is too short (less than 1 second), don't send
       if (duration < 1) {
-        Alert.alert("Recording too short", "Please record for at least 1 second");
+        Alert.alert(
+          "Recording too short",
+          "Please record for at least 1 second",
+        );
         return;
       }
 
       // Send voice message automatically
       await sendVoiceMessage(uri, duration);
     } catch (err) {
-      console.error("Failed to stop recording", err);
       Alert.alert("Error", "Failed to stop recording");
       setRecording(null);
       setIsRecording(false);
@@ -647,7 +932,6 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         }, 1000);
       }
     } catch (err) {
-      console.error("Failed to resume recording", err);
       Alert.alert("Error", "Failed to resume recording");
     }
   };
@@ -723,10 +1007,11 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       if (res.ok && data.message) {
         addMessage(data.message);
       } else {
-        Alert.alert("Error", data.message || "Failed to send voice message");
+        // Show error message - especially for blocking-related errors
+        const errorMsg = data.message || "Failed to send voice message";
+        Alert.alert("Error", errorMsg);
       }
     } catch (err) {
-      console.error("Send voice message error:", err);
       Alert.alert("Error", "Failed to send voice message");
     } finally {
       setIsSendingVoice(false);
@@ -758,116 +1043,129 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     setIsLoadingAudio(false);
   }, []);
 
-  const playVoiceMessage = useCallback(async (messageId, voiceUrl, duration) => {
-    // If same message is playing, pause/resume it
-    if (playingMessageId === messageId && soundRef.current) {
-      try {
-        const status = await soundRef.current.getStatusAsync();
-        if (status.isLoaded) {
-          if (status.isPlaying) {
-            // Pause
-            await soundRef.current.pauseAsync();
-            if (playbackTimerRef.current) {
-              clearInterval(playbackTimerRef.current);
-              playbackTimerRef.current = null;
-            }
-            setPlayingMessageId(null);
-            return;
-          } else if (status.isLoaded && !status.isPlaying) {
-            // Resume
-            await soundRef.current.playAsync();
-            // Restart progress tracking
-            const totalDuration = duration || 0;
-            playbackTimerRef.current = setInterval(async () => {
-              try {
-                const status = await soundRef.current.getStatusAsync();
-                if (status.isLoaded && status.positionMillis !== undefined) {
-                  const progress = totalDuration > 0 
-                    ? (status.positionMillis / 1000) / totalDuration 
-                    : 0;
-                  setPlaybackProgress(Math.min(progress, 1));
-                  
-                  // Check if finished
-                  if (status.didJustFinish || (status.positionMillis >= status.durationMillis && status.durationMillis > 0)) {
-                    stopAudioPlayback();
-                  }
-                }
-              } catch (err) {
-                console.error("Error getting playback status:", err);
-              }
-            }, 100);
-            setPlayingMessageId(messageId);
-            return;
-          }
-        }
-      } catch (err) {
-        console.error("Error toggling audio:", err);
-      }
-    }
-
-    // Stop any currently playing audio
-    await stopAudioPlayback();
-
-    // Start loading new audio
-    setIsLoadingAudio(true);
-    setPlayingMessageId(messageId);
-
-    try {
-      // Set audio mode for playback
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-      });
-
-      // Load and play the sound
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: voiceUrl },
-        { shouldPlay: true }
-      );
-
-      // Set up status update listener
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded) {
-          if (status.didJustFinish) {
-            // Audio finished playing
-            stopAudioPlayback();
-          }
-        }
-      });
-
-      soundRef.current = sound;
-
-      // Start progress tracking
-      const totalDuration = duration || 0;
-      playbackTimerRef.current = setInterval(async () => {
+  const playVoiceMessage = useCallback(
+    async (messageId, voiceUrl, duration) => {
+      // If same message is playing, pause/resume it
+      if (playingMessageId === messageId && soundRef.current) {
         try {
-          const status = await sound.getStatusAsync();
-          if (status.isLoaded && status.positionMillis !== undefined) {
-            const progress = totalDuration > 0 
-              ? (status.positionMillis / 1000) / totalDuration 
-              : 0;
-            setPlaybackProgress(Math.min(progress, 1));
-            
-            // Check if finished
-            if (status.didJustFinish || (status.positionMillis >= status.durationMillis && status.durationMillis > 0)) {
-              stopAudioPlayback();
+          const status = await soundRef.current.getStatusAsync();
+          if (status.isLoaded) {
+            if (status.isPlaying) {
+              // Pause
+              await soundRef.current.pauseAsync();
+              if (playbackTimerRef.current) {
+                clearInterval(playbackTimerRef.current);
+                playbackTimerRef.current = null;
+              }
+              setPlayingMessageId(null);
+              return;
+            } else if (status.isLoaded && !status.isPlaying) {
+              // Resume
+              await soundRef.current.playAsync();
+              // Restart progress tracking
+              const totalDuration = duration || 0;
+              playbackTimerRef.current = setInterval(async () => {
+                try {
+                  const status = await soundRef.current.getStatusAsync();
+                  if (status.isLoaded && status.positionMillis !== undefined) {
+                    const progress =
+                      totalDuration > 0
+                        ? status.positionMillis / 1000 / totalDuration
+                        : 0;
+                    setPlaybackProgress(Math.min(progress, 1));
+
+                    // Check if finished
+                    if (
+                      status.didJustFinish ||
+                      (status.positionMillis >= status.durationMillis &&
+                        status.durationMillis > 0)
+                    ) {
+                      stopAudioPlayback();
+                    }
+                  }
+                } catch (err) {
+                  console.error("Error getting playback status:", err);
+                }
+              }, 100);
+              setPlayingMessageId(messageId);
+              return;
             }
           }
         } catch (err) {
-          console.error("Error getting playback status:", err);
+          console.error("Error toggling audio:", err);
         }
-      }, 100);
+      }
 
-      setIsLoadingAudio(false);
-    } catch (err) {
-      console.error("Error playing voice message:", err);
-      Alert.alert("Error", "Failed to play voice message");
-      setIsLoadingAudio(false);
-      setPlayingMessageId(null);
-      setPlaybackProgress(0);
-    }
-  }, [playingMessageId, stopAudioPlayback]);
+      // Stop any currently playing audio
+      await stopAudioPlayback();
+
+      // Start loading new audio
+      setIsLoadingAudio(true);
+      setPlayingMessageId(messageId);
+
+      try {
+        // Set audio mode for playback
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+        });
+
+        // Load and play the sound
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: voiceUrl },
+          { shouldPlay: true },
+        );
+
+        // Set up status update listener
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded) {
+            if (status.didJustFinish) {
+              // Audio finished playing
+              stopAudioPlayback();
+            }
+          }
+        });
+
+        soundRef.current = sound;
+
+        // Start progress tracking
+        const totalDuration = duration || 0;
+        playbackTimerRef.current = setInterval(async () => {
+          try {
+            const status = await sound.getStatusAsync();
+            if (status.isLoaded && status.positionMillis !== undefined) {
+              const progress =
+                totalDuration > 0
+                  ? status.positionMillis / 1000 / totalDuration
+                  : 0;
+              setPlaybackProgress(Math.min(progress, 1));
+
+              // Check if finished
+              if (
+                status.didJustFinish ||
+                (status.positionMillis >= status.durationMillis &&
+                  status.durationMillis > 0)
+              ) {
+                stopAudioPlayback();
+              }
+            }
+          } catch (err) {
+            console.error("Error getting playback status:", err);
+          }
+        }, 100);
+
+        setIsLoadingAudio(false);
+      } catch (err) {
+        console.error("Error playing voice message:", err);
+        Alert.alert("Error", "Failed to play voice message");
+        setIsLoadingAudio(false);
+        setPlayingMessageId(null);
+        setPlaybackProgress(0);
+      }
+    },
+    [playingMessageId, stopAudioPlayback],
+  );
 
   const handleBlockUser = useCallback(async () => {
     if (!otherUser?._id || !token) return;
@@ -938,7 +1236,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         activeOpacity={0.7}
         disabled={isLoading || !voiceUrl}
       >
-        <View 
+        <View
           style={[
             styles.voicePlayButton,
             isSent && { backgroundColor: "rgba(0, 0, 0, 0.08)" },
@@ -946,9 +1244,9 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           ]}
         >
           {isLoading ? (
-            <ActivityIndicator 
-              size="small" 
-              color={isSent ? COLORS.textDark : COLORS.primary} 
+            <ActivityIndicator
+              size="small"
+              color={isSent ? COLORS.textDark : COLORS.primary}
             />
           ) : (
             <Ionicons
@@ -958,7 +1256,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
             />
           )}
         </View>
-        
+
         <View style={styles.voiceProgressContainer}>
           {/* Waveform-style progress (segmented bars) */}
           <View
@@ -970,7 +1268,8 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           >
             {Array.from({ length: 14 }).map((_, index) => {
               const ratio = (index + 1) / 14;
-              const isActive = ratio <= currentProgress || currentProgress === 0;
+              const isActive =
+                ratio <= currentProgress || currentProgress === 0;
               const heightPattern = 6 + (index % 4) * 4;
               return (
                 <View
@@ -984,15 +1283,15 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                           ? "rgba(0,0,0,0.9)"
                           : "rgba(0,0,0,0.35)"
                         : isActive
-                        ? COLORS.primary
-                        : "rgba(0,0,0,0.12)",
+                          ? COLORS.primary
+                          : "rgba(0,0,0,0.12)",
                     },
                   ]}
                 />
               );
             })}
           </View>
-          
+
           {/* Duration text */}
           <Text
             style={[
@@ -1000,9 +1299,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
               isSent && styles.voiceDurationTextSent,
             ]}
           >
-            {duration > 0
-              ? formatDuration(Math.floor(duration))
-              : "0:00"}
+            {duration > 0 ? formatDuration(Math.floor(duration)) : "0:00"}
           </Text>
         </View>
       </TouchableOpacity>
@@ -1078,7 +1375,11 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       currentUserId;
     const read = !!item.read;
     const isVoiceMessage = !!item.voiceMessage;
-    
+
+    // ✅ Handle messages that are decrypting - show text or decrypting indicator
+    const messageText =
+      item.text || (item.isEncrypted ? "🔓 Decrypting..." : "");
+
     return (
       <TouchableOpacity
         style={[
@@ -1100,7 +1401,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
             style={[styles.messageText, isSent && styles.messageTextSent]}
             selectable
           >
-            {item.text}
+            {messageText}
           </Text>
         )}
         <View
@@ -1191,6 +1492,38 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     );
   };
 
+  // E2EE Status Header Component
+  const E2EEStatusHeader = () => {
+    if (otherUserPublicKey && !publicKeyError) {
+      return (
+        <View
+          style={{
+            backgroundColor: "#E8F5E9",
+            borderBottomWidth: 1,
+            borderBottomColor: "#C8E6C9",
+            paddingHorizontal: 16,
+            paddingVertical: 12,
+            alignItems: "center",
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Ionicons name="" size={16} color="#4CAF50" />
+            <Text
+              style={{
+                fontSize: 12,
+                color: "#2E7D32",
+                fontWeight: "600",
+              }}
+            >
+              🔒 Messages are end-to-end encrypted !!
+            </Text>
+          </View>
+        </View>
+      );
+    }
+    return null;
+  };
+
   if (!otherUser) return null;
 
   return (
@@ -1198,12 +1531,14 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       visible={visible}
       animationType="slide"
       transparent={false}
+      statusBarTranslucent
+      presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : 0}
       >
         {showMenu && (
           <TouchableOpacity
@@ -1213,12 +1548,12 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           />
         )}
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
             onPress={() => {
               // Dismiss keyboard when back is pressed
               inputRef.current?.blur();
               onClose();
-            }} 
+            }}
             style={styles.backButton}
           >
             <Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} />
@@ -1359,6 +1694,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                 }
               });
             }}
+            ListHeaderComponent={<E2EEStatusHeader />}
             ListEmptyComponent={
               <View style={styles.emptyChat}>
                 <Ionicons
@@ -1418,48 +1754,57 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
             </TouchableOpacity>
           </View>
         ) : (
-          <View style={styles.inputRow}>
-            <TextInput
-              ref={inputRef}
-              style={styles.input}
-              value={inputText}
-              onChangeText={handleInputChange}
-              placeholder="Message..."
-              placeholderTextColor={COLORS.placeholderText}
-              multiline
-              maxLength={2000}
-              blurOnSubmit={false}
-              returnKeyType="default"
-              showSoftInputOnFocus={true}
-              keyboardType="default"
-              onSubmitEditing={() => {
-                // Keep keyboard open on submit
-                inputRef.current?.focus();
-              }}
-            />
-            {inputText.trim() ? (
-              <TouchableOpacity
-                style={styles.sendButton}
-                onPress={sendMessage}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="send" size={20} color={COLORS.white} />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={styles.micButton}
-                onPress={isSendingVoice ? undefined : startRecording}
-                activeOpacity={isSendingVoice ? 1 : 0.7}
-                disabled={isSendingVoice}
-              >
-                {isSendingVoice ? (
-                  <ActivityIndicator size="small" color={COLORS.primary} />
-                ) : (
-                  <Ionicons name="mic" size={24} color={COLORS.primary} />
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
+          <>
+            <View style={styles.inputRow}>
+              <TextInput
+                ref={inputRef}
+                style={styles.input}
+                value={inputText}
+                onChangeText={handleInputChange}
+                placeholder="Message..."
+                placeholderTextColor={COLORS.placeholderText}
+                multiline
+                maxLength={2000}
+                blurOnSubmit={false}
+                returnKeyType="default"
+                showSoftInputOnFocus={true}
+                keyboardType="default"
+                onSubmitEditing={() => {
+                  // Keep keyboard open on submit
+                  inputRef.current?.focus();
+                }}
+                editable={!publicKeyError && !recipientKeyLoading}
+              />
+              {inputText.trim() ? (
+                <TouchableOpacity
+                  style={[
+                    styles.sendButton,
+                    (publicKeyError || recipientKeyLoading) && {
+                      opacity: 0.5,
+                    },
+                  ]}
+                  onPress={sendMessage}
+                  activeOpacity={0.7}
+                  disabled={!!publicKeyError || recipientKeyLoading}
+                >
+                  <Ionicons name="send" size={20} color={COLORS.white} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.micButton}
+                  onPress={isSendingVoice ? undefined : startRecording}
+                  activeOpacity={isSendingVoice ? 1 : 0.7}
+                  disabled={isSendingVoice}
+                >
+                  {isSendingVoice ? (
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                  ) : (
+                    <Ionicons name="mic" size={24} color={COLORS.primary} />
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
+          </>
         )}
       </KeyboardAvoidingView>
     </Modal>

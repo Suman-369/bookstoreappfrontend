@@ -78,7 +78,6 @@ export const useAuthStore = create((set) => ({
 
       set({ token, user });
     } catch (error) {
-      console.log("Auth check failed", error);
     } finally {
       set({ isCheckingAuth: false });
     }

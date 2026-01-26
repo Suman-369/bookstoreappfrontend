@@ -5,12 +5,13 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect, useState, useRef } from "react";
 import { useAuthStore } from "../store/authStore";
 import { useFonts } from "expo-font";
-import { 
-  registerForPushNotificationsAsync, 
+import {
+  registerForPushNotificationsAsync,
   registerPushTokenWithBackend,
   requestNotificationPermissionsOnFirstLaunch,
-  setupNotificationResponseHandler
+  setupNotificationResponseHandler,
 } from "../utils/notifications";
+import useKeyStorage from "../hooks/useKeyStorage";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -21,7 +22,16 @@ export default function RootLayout() {
   const [isReady, setIsReady] = useState(false);
   const notificationResponseSubscription = useRef(null);
 
-  const fontMap = { "JetBrainsMono-Medium": require("../assets/fonts/JetBrainsMono-Medium.ttf") };
+  // Initialize E2EE keys on app startup
+  const {
+    isInitialized: keysInitialized,
+    isLoading: keysLoading,
+    error: keysError,
+  } = useKeyStorage();
+
+  const fontMap = {
+    "JetBrainsMono-Medium": require("../assets/fonts/JetBrainsMono-Medium.ttf"),
+  };
   const [fontLoaded] = useFonts(fontMap);
 
   useEffect(() => {
@@ -48,7 +58,10 @@ export default function RootLayout() {
     setupHandler();
 
     return () => {
-      if (notificationResponseSubscription.current && typeof notificationResponseSubscription.current.remove === "function") {
+      if (
+        notificationResponseSubscription.current &&
+        typeof notificationResponseSubscription.current.remove === "function"
+      ) {
         notificationResponseSubscription.current.remove();
       }
     };
@@ -61,6 +74,16 @@ export default function RootLayout() {
     };
     initAuth();
   }, []);
+
+  // Log E2EE initialization status
+  useEffect(() => {
+    if (keysInitialized) {
+      console.log("✅ E2EE keys initialized successfully");
+    }
+    if (keysError) {
+      console.error("❌ E2EE keys initialization error:", keysError);
+    }
+  }, [keysInitialized, keysError]);
 
   // Register push token when user logs in
   useEffect(() => {
@@ -81,11 +104,16 @@ export default function RootLayout() {
         const NotifsModule = await import("expo-notifications");
         const Notifs = NotifsModule.default || NotifsModule;
         if (Notifs && Notifs.addNotificationReceivedListener) {
-          subscription = Notifs.addNotificationReceivedListener((notification) => {
-            // Notification will be shown automatically by our handler
-            // You can add custom handling here if needed
-            console.log("Notification received:", notification.request.content);
-          });
+          subscription = Notifs.addNotificationReceivedListener(
+            (notification) => {
+              // Notification will be shown automatically by our handler
+              // You can add custom handling here if needed
+              console.log(
+                "Notification received:",
+                notification.request.content,
+              );
+            },
+          );
         }
       } catch (e) {
         // Ignore - notifications not available in Expo Go
@@ -105,9 +133,6 @@ export default function RootLayout() {
     if (!isSignedIn && !isAuthScreen) router.replace("/(auth)");
     else if (isSignedIn && isAuthScreen) router.replace("/(tabs)");
   }, [user, token, segments, isReady]);
-
-
-
 
   return (
     <SafeAreaProvider>
