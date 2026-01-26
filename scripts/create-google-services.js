@@ -1,13 +1,5 @@
-#!/usr/bin/env node
 
-/**
- * EAS Build Hook: Creates google-services.json from EAS secret
- * This script reads the GOOGLE_SERVICES_JSON environment variable
- * and writes it to google-services.json file
- *
- * This script is designed to work with EAS Build and handles all argument formats
- * that EAS might pass, including --platform flags.
- */
+
 
 const fs = require("fs");
 const path = require("path");

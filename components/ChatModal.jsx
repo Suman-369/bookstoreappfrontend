@@ -32,6 +32,8 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
   const [lastSeen, setLastSeen] = useState(null);
   const [isTyping, setIsTyping] = useState(false);
   const [isOtherTyping, setIsOtherTyping] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
   const listRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const markReadTimeoutRef = useRef(null);
@@ -85,8 +87,25 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     if (visible && otherUser?._id) {
       setInputText("");
       fetchMessages();
+      checkBlockedStatus();
     }
   }, [visible, otherUser?._id, fetchMessages]);
+
+  const checkBlockedStatus = useCallback(async () => {
+    if (!otherUser?._id || !token) return;
+    try {
+      const res = await fetch(`${API_URL}/users/blocked/list`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const blockedIds = (data.blockedUsers || []).map((u) => String(u._id || u));
+        setIsBlocked(blockedIds.includes(String(otherUser._id)));
+      }
+    } catch (e) {
+      console.error("Check blocked status:", e);
+    }
+  }, [otherUser?._id, token]);
 
   // Cleanup typing indicator when chat closes
   useEffect(() => {
@@ -212,6 +231,10 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     setMessages((prev) => prev.filter((m) => m._id !== messageId));
   }, []);
 
+  const handleConversationCleared = useCallback(() => {
+    setMessages([]);
+  }, []);
+
   const handleTypingStart = useCallback(({ userId: typingUserId }) => {
     if (typingUserId === otherUser?._id) {
       setIsOtherTyping(true);
@@ -231,14 +254,16 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     socket.on("message_deleted", handleMessageDeleted);
     socket.on("typing_start", handleTypingStart);
     socket.on("typing_stop", handleTypingStop);
+    socket.on("conversation_cleared", handleConversationCleared);
     return () => {
       socket.off("new_message", handleNewMessage);
       socket.off("messages_read", handleMessagesRead);
       socket.off("message_deleted", handleMessageDeleted);
       socket.off("typing_start", handleTypingStart);
       socket.off("typing_stop", handleTypingStop);
+      socket.off("conversation_cleared", handleConversationCleared);
     };
-  }, [socket, visible, handleNewMessage, handleMessagesRead, handleMessageDeleted, handleTypingStart, handleTypingStop]);
+  }, [socket, visible, handleNewMessage, handleMessagesRead, handleMessageDeleted, handleTypingStart, handleTypingStop, handleConversationCleared]);
 
   // Handle typing indicator
   const handleInputChange = useCallback((text) => {
@@ -267,6 +292,13 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
   const sendMessage = async () => {
     const trimmed = inputText.trim();
     if (!trimmed || !otherUser?._id || sending) return;
+    
+    // Check if user is blocked
+    if (isBlocked) {
+      Alert.alert("Error", "You have blocked this user. Unblock them to send messages.");
+      return;
+    }
+    
     setInputText("");
     setSending(true);
     
@@ -297,7 +329,12 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
             addMessage(saved);
           } else if (err) {
             setInputText(trimmed);
-            sendViaApi();
+            // Show error message if it's a blocking-related error
+            if (err.message && (err.message.includes("blocked") || err.message.includes("cannot send"))) {
+              Alert.alert("Error", err.message);
+            } else {
+              sendViaApi();
+            }
           }
         }
       );
@@ -319,10 +356,18 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           }),
         });
         const data = await res.json();
-        if (res.ok && data.message) addMessage(data.message);
-        else setInputText(trimmed);
+        if (res.ok && data.message) {
+          addMessage(data.message);
+        } else {
+          setInputText(trimmed);
+          // Show error message if it's a blocking-related error
+          if (data.message && (data.message.includes("blocked") || data.message.includes("cannot send"))) {
+            Alert.alert("Error", data.message);
+          }
+        }
       } catch (e) {
         setInputText(trimmed);
+        console.error("Send message error:", e);
       } finally {
         setSending(false);
       }
@@ -371,6 +416,95 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       }
     }
   }, [socket, token]);
+
+  const handleClearChat = useCallback(async () => {
+    if (!otherUser?._id || !token) return;
+    
+    Alert.alert(
+      "Clear Chat",
+      "Are you sure you want to delete all messages in this conversation? This action cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const res = await fetch(
+                `${API_URL}/messages/conversation/${otherUser._id}`,
+                {
+                  method: "DELETE",
+                  headers: { Authorization: `Bearer ${token}` },
+                }
+              );
+              if (res.ok) {
+                setMessages([]);
+                Alert.alert("Success", "Chat cleared successfully");
+              } else {
+                const data = await res.json();
+                Alert.alert("Error", data.message || "Failed to clear chat");
+              }
+            } catch (e) {
+              console.error("Clear chat error:", e);
+              Alert.alert("Error", "Failed to clear chat");
+            }
+          },
+        },
+      ]
+    );
+  }, [otherUser?._id, token]);
+
+  const handleBlockUser = useCallback(async () => {
+    if (!otherUser?._id || !token) return;
+    
+    const action = isBlocked ? "unblock" : "block";
+    const actionText = isBlocked ? "Unblock" : "Block";
+    const message = isBlocked
+      ? `Are you sure you want to unblock ${otherUser.username}?`
+      : `Are you sure you want to block ${otherUser.username}? They won't be able to send you messages.`;
+
+    Alert.alert(
+      `${actionText} User`,
+      message,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: actionText,
+          style: isBlocked ? "default" : "destructive",
+          onPress: async () => {
+            try {
+              const res = await fetch(`${API_URL}/users/${action}`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ userId: otherUser._id }),
+              });
+              if (res.ok) {
+                setIsBlocked(!isBlocked);
+                if (!isBlocked) {
+                  // If blocking, clear the chat and close modal
+                  setMessages([]);
+                  Alert.alert("Success", "User blocked successfully", [
+                    { text: "OK", onPress: onClose },
+                  ]);
+                } else {
+                  Alert.alert("Success", "User unblocked successfully");
+                }
+              } else {
+                const data = await res.json();
+                Alert.alert("Error", data.message || `Failed to ${action} user`);
+              }
+            } catch (e) {
+              console.error(`${action} user error:`, e);
+              Alert.alert("Error", `Failed to ${action} user`);
+            }
+          },
+        },
+      ]
+    );
+  }, [otherUser, token, isBlocked, onClose]);
 
   const renderMessage = ({ item }) => {
     const isSent =
@@ -446,6 +580,13 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
       >
+        {showMenu && (
+          <TouchableOpacity
+            style={styles.menuBackdrop}
+            activeOpacity={1}
+            onPress={() => setShowMenu(false)}
+          />
+        )}
         <View style={styles.header}>
           <TouchableOpacity onPress={onClose} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} />
@@ -491,6 +632,60 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
               </Text>
             </View>
           </TouchableOpacity>
+          <View style={styles.menuButtonContainer}>
+            <TouchableOpacity
+              onPress={() => setShowMenu(!showMenu)}
+              style={styles.menuButton}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={showMenu ? "close" : "ellipsis-vertical"}
+                size={24}
+                color={COLORS.textPrimary}
+              />
+            </TouchableOpacity>
+            
+            {/* Menu Dropdown */}
+            {showMenu && (
+              <View style={styles.menuContainer}>
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      setShowMenu(false);
+                      handleClearChat();
+                    }}
+                    activeOpacity={0.6}
+                  >
+                    <Ionicons name="trash-outline" size={22} color={COLORS.textPrimary} />
+                    <Text style={styles.menuItemText}>Clear Chat</Text>
+                  </TouchableOpacity>
+                  <View style={styles.menuDivider} />
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      setShowMenu(false);
+                      handleBlockUser();
+                    }}
+                    activeOpacity={0.6}
+                  >
+                    <Ionicons
+                      name={isBlocked ? "lock-open-outline" : "lock-closed-outline"}
+                      size={22}
+                      color={isBlocked ? COLORS.primary : "#FF3B30"}
+                    />
+                    <Text
+                      style={[
+                        styles.menuItemText,
+                        isBlocked && { color: COLORS.primary },
+                        !isBlocked && { color: "#FF3B30" },
+                      ]}
+                    >
+                      {isBlocked ? "Unblock User" : "Block User"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+            )}
+          </View>
         </View>
 
         {loading ? (
