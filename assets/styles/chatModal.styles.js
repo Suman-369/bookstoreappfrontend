@@ -1,10 +1,11 @@
-import { StyleSheet } from "react-native";
+import { StyleSheet, Platform } from "react-native";
 import COLORS from "../../constants/colors";
 
 export default StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    // WhatsApp-like chat background
+    backgroundColor: "#ECE5DD",
   },
   header: {
     flexDirection: "row",
@@ -50,14 +51,16 @@ export default StyleSheet.create({
   },
   bubbleSent: {
     alignSelf: "flex-end",
-    backgroundColor: COLORS.primary,
+    // WhatsApp-like sender bubble (light green)
+    backgroundColor: "#DCF8C6",
     borderBottomRightRadius: 4,
   },
   bubbleReceived: {
     alignSelf: "flex-start",
-    backgroundColor: COLORS.cardBackground,
+    // WhatsApp-like receiver bubble (white)
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: "#FFFFFF",
     borderBottomLeftRadius: 4,
   },
   messageText: {
@@ -65,7 +68,8 @@ export default StyleSheet.create({
     color: COLORS.textDark,
   },
   messageTextSent: {
-    color: COLORS.white,
+    // Sender text black/dark for high contrast on light green
+    color: COLORS.textDark,
   },
   messageTimeRow: {
     flexDirection: "row",
@@ -82,20 +86,31 @@ export default StyleSheet.create({
     color: COLORS.textSecondary,
   },
   messageTimeSent: {
-    color: "rgba(255,255,255,0.8)",
+    color: COLORS.textSecondary,
   },
   tickIcon: {
     marginLeft: 2,
   },
   inputRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-end",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    paddingBottom: 24,
+    paddingBottom: Platform.OS === "ios" ? 20 : 10,
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
     backgroundColor: COLORS.cardBackground,
+  },
+  micButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.inputBackground,
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   input: {
     flex: 1,
@@ -108,6 +123,7 @@ export default StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     maxHeight: 100,
+    minHeight: 44,
   },
   sendButton: {
     marginLeft: 8,
@@ -117,6 +133,52 @@ export default StyleSheet.create({
     backgroundColor: COLORS.primary,
     justifyContent: "center",
     alignItems: "center",
+  },
+  recordingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    paddingBottom: 24,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    backgroundColor: "#FF3B30",
+  },
+  cancelRecordingButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  recordingIndicator: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  recordingDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: COLORS.white,
+    marginRight: 8,
+  },
+  recordingText: {
+    fontSize: 16,
+    color: COLORS.white,
+    fontWeight: "600",
+  },
+  stopRecordingButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255, 255, 255, 0.22)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
   },
   loadingContainer: {
     flex: 1,
@@ -145,6 +207,26 @@ export default StyleSheet.create({
     fontSize: 13,
     fontStyle: "italic",
     color: COLORS.textSecondary,
+  },
+  typingBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 8,
+    alignSelf: "flex-start",
+    backgroundColor: COLORS.cardBackground,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 18,
+    borderBottomLeftRadius: 4,
+  },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: COLORS.textSecondary,
+    marginHorizontal: 2,
   },
   menuButtonContainer: {
     position: "relative",
@@ -197,5 +279,88 @@ export default StyleSheet.create({
     color: COLORS.textPrimary,
     fontWeight: "500",
     flex: 1,
+  },
+  voiceMessageContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  voiceIcon: {
+    marginRight: 8,
+  },
+  voiceMessageText: {
+    fontSize: 15,
+    color: COLORS.textDark,
+    fontWeight: "500",
+  },
+  voiceMessageWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    minWidth: 140,
+    maxWidth: "100%",
+    paddingVertical: 6,
+  },
+  voicePlayButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  voiceProgressContainer: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  voiceProgressBar: {
+    flex: 1,
+    height: 26,
+    borderRadius: 14,
+    paddingHorizontal: 2,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginRight: 8,
+  },
+  voiceWaveBar: {
+    width: 2,
+    borderRadius: 999,
+    backgroundColor: COLORS.primary,
+    marginHorizontal: 1,
+  },
+  voiceDurationText: {
+    fontSize: 13,
+    color: COLORS.textDark,
+    fontWeight: "500",
+    minWidth: 48,
+    textAlign: "right",
+    flexShrink: 0,
+  },
+  voiceDurationTextSent: {
+    color: COLORS.textDark,
+  },
+  recordingWaveContainer: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "flex-start",
+    marginRight: 12,
+    height: 28,
+  },
+  recordingWaveBar: {
+    width: 3,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    marginHorizontal: 1,
+  },
+  pauseResumeRecordingButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255, 255, 255, 0.18)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
   },
 });
