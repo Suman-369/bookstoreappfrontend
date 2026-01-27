@@ -24,7 +24,7 @@ import COLORS from "../constants/colors";
 import styles from "../assets/styles/chatModal.styles";
 import { scheduleLocalNotification } from "../utils/notifications";
 import { formatLastSeen } from "../utils/dateUtils";
-import { encryptMessageE2EE, decryptMessageE2EE } from "../utils/cryptoUtils";
+import { encryptMessage, decryptMessage } from "../utils/cryptoUtils";
 import useKeyStorage from "../hooks/useKeyStorage";
 import { useRecipientPublicKeyStore } from "../store/recipientPublicKeyStore";
 import {
@@ -41,6 +41,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     publicKey: myPublicKey,
     secretKey: mySecretKey,
     isInitialized: keysInitialized,
+    e2eeReady,
     getKeys,
   } = useKeyStorage();
 
@@ -91,61 +92,95 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
 
       // Decrypt messages that are encrypted
       const decryptedMessages = list.map((msg) => {
-        if (
-          msg.isEncrypted &&
-          msg.encryptedMessage &&
-          msg.encryptedSymmetricKey &&
-          msg.nonce
-        ) {
-          try {
-            // Get sender's public key - prefer from message object, fallback to cached
-            let senderPublicKey =
-              typeof msg.sender === "object" ? msg.sender.publicKey : null;
+        const senderId =
+          typeof msg.sender === "object" ? msg.sender._id : msg.sender;
+        const isFromOtherUser = senderId !== currentUserId;
 
-            // If not in message object, use cached recipient key (for messages from other user)
-            const isFromOtherUser =
-              (typeof msg.sender === "object" ? msg.sender._id : msg.sender) !==
-              currentUserId;
-            if (!senderPublicKey && isFromOtherUser) {
-              senderPublicKey = otherUserPublicKey;
+        // Messages are encrypted if isEncrypted=true AND have encryptedMessage + nonce
+        if (msg.isEncrypted && msg.encryptedMessage && msg.nonce && e2eeReady) {
+          try {
+            // Determine which public key to use for decryption
+            let keyForDecryption;
+
+            if (isFromOtherUser) {
+              // Message from them: We need THEIR public key
+              // 1. Try key stored on message
+              keyForDecryption = msg.senderPublicKey;
+
+              // 2. Try key from sender object
+              if (
+                !keyForDecryption &&
+                typeof msg.sender === "object" &&
+                msg.sender.publicKey
+              ) {
+                keyForDecryption = msg.sender.publicKey;
+              }
+
+              // 3. Fallback to cached partner key
+              if (!keyForDecryption) {
+                keyForDecryption = otherUserPublicKey;
+              }
+            } else {
+              // Message from ME: We need the RECIPIENT'S public key to decrypt
+              // (because we encrypted it with MySecretKey + RecipientPublicKey)
+              keyForDecryption = otherUserPublicKey;
             }
 
-            // If still no key, can't decrypt
-            if (!senderPublicKey || !mySecretKey) {
+            // If no proper key available, can't decrypt
+            if (!keyForDecryption || !mySecretKey) {
+              // Only warn if we really should have the key (e.g. it's from the person we are chatting with)
+              // Don't spam warnings for own messages if we just haven't fetched the partner's key yet
+              if (isFromOtherUser || otherUserPublicKey) {
+                console.warn(
+                  `❌ Cannot decrypt message ${msg._id}. isFromOtherUser: ${isFromOtherUser}, hasKey: ${!!keyForDecryption}`,
+                );
+              }
+
               return {
                 ...msg,
-                text: "🔒 Unable to decrypt message - missing keys",
-                isDecrypted: false,
+                text: "🔒 [Waiting for key...]",
+                decryptionFailed: true,
               };
             }
 
-            const decryptedText = decryptMessageE2EE(
-              msg.encryptedMessage,
-              msg.encryptedSymmetricKey,
-              msg.nonce,
-              senderPublicKey,
+            // Decrypt using the message object and my private key
+            // Note: When decrypting my own message, keyForDecryption is the RECIPIENT'S public key
+            const decryptedText = decryptMessage(
+              {
+                cipherText: msg.encryptedMessage,
+                nonce: msg.nonce,
+                senderPublicKey: keyForDecryption,
+              },
               mySecretKey,
             );
 
-            // CRITICAL: If decryption returns null/undefined, do NOT render empty message
-            if (!decryptedText || decryptedText.length === 0) {
+            console.log(
+              "✅ UI message text (fetch):",
+              decryptedText ? "SUCCESS" : "FAILED",
+            );
+
+            // If decryption fails (null/empty), show a safe placeholder
+            if (!decryptedText) {
+              console.warn(
+                `❌ Message decryption returned empty for ${msg._id}`,
+              );
               return {
                 ...msg,
-                text: "🔒 Unable to decrypt message - decryption failed",
-                isDecrypted: false,
-              };
-            } else {
-              return {
-                ...msg,
-                text: decryptedText,
-                isDecrypted: true,
+                text: "🔒 [Decryption failed]",
+                decryptionFailed: true,
               };
             }
-          } catch (error) {
+
             return {
               ...msg,
-              text: "🔒 Unable to decrypt message - error occurred",
-              isDecrypted: false,
+              text: decryptedText,
+            };
+          } catch (error) {
+            console.error("❌ Decryption error in fetchMessages:", error);
+            return {
+              ...msg,
+              text: "🔒 [Decryption error]",
+              decryptionFailed: true,
             };
           }
         }
@@ -154,19 +189,35 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
 
       setMessages(decryptedMessages);
     } catch (e) {
+      console.error("Failed to fetch messages:", e);
       setMessages([]);
     } finally {
       setLoading(false);
     }
-  }, [otherUser?._id, token, mySecretKey, otherUserPublicKey]);
+  }, [
+    otherUser?._id,
+    token,
+    mySecretKey,
+    otherUserPublicKey,
+    myPublicKey,
+    currentUserId,
+    e2eeReady,
+  ]);
 
   // Fetch recipient's public key with retry logic
+  const { invalidateCache } = useRecipientPublicKeyStore();
+
   const fetchRecipientPublicKey = useCallback(
     async (forceRefresh = false) => {
       if (!otherUser?._id || !token) return false;
 
-      try {
+      if (forceRefresh) {
+        invalidateCache(otherUser._id);
         setRecipientKeyLoading(true);
+      }
+
+      try {
+        if (!forceRefresh) setRecipientKeyLoading(true);
         setPublicKeyError(null);
 
         const publicKey = await fetchFromStore(otherUser._id, token, {
@@ -186,9 +237,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           setPublicKeyError("User not found");
         } else {
           // Network error or other issue
-          setPublicKeyError(
-            "Unable to reach recipient's encryption key. Please try again.",
-          );
+          setPublicKeyError("Unable to reach recipient's encryption key.");
         }
         setOtherUserPublicKey(null);
         return false;
@@ -196,7 +245,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         setRecipientKeyLoading(false);
       }
     },
-    [otherUser?._id, token, fetchFromStore],
+    [otherUser?._id, token, fetchFromStore, invalidateCache],
   );
 
   // Keys are uploaded automatically by useKeyStorage hook on initialization
@@ -237,10 +286,23 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       setInputText("");
       fetchMessages();
       checkBlockedStatus();
-      // Auto-focus input immediately when modal opens to keep keyboard open
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 100);
+      // Enhanced keyboard opening with multiple attempts for consistency
+      const openKeyboard = () => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          // Additional focus attempt after a short delay for reliability
+          setTimeout(() => {
+            if (inputRef.current && !inputRef.current.isFocused()) {
+              inputRef.current.focus();
+            }
+          }, 50);
+        }
+      };
+
+      // Initial focus attempt
+      setTimeout(openKeyboard, 100);
+      // Backup focus attempt for devices that need more time
+      setTimeout(openKeyboard, 300);
     } else if (!visible) {
       // Blur input when modal closes to dismiss keyboard
       inputRef.current?.blur();
@@ -361,6 +423,85 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     }
   }, [visible, otherUser?._id, fetchOnlineStatus]);
 
+  // Re-decrypt messages when recipient public key becomes available
+  useEffect(() => {
+    if (otherUserPublicKey && messages.length > 0 && mySecretKey && e2eeReady) {
+      setMessages((prev) =>
+        prev.map((msg) => {
+          const senderId =
+            typeof msg.sender === "object" ? msg.sender._id : msg.sender;
+          const isFromOtherUser = senderId !== currentUserId;
+
+          // Only re-decrypt messages from other user that don't have text yet or have failed decryption
+          if (
+            isFromOtherUser &&
+            msg.isEncrypted &&
+            (!msg.text || msg.decryptionFailed) &&
+            msg.encryptedMessage &&
+            msg.nonce
+          ) {
+            try {
+              // Determine correct key for decryption
+              let keyForDecryption;
+
+              if (isFromOtherUser) {
+                // From them: use their key (on message or cached)
+                keyForDecryption = msg.senderPublicKey || otherUserPublicKey;
+              } else {
+                // From me: use the RECIPIENT'S key (otherUserPublicKey)
+                keyForDecryption = otherUserPublicKey;
+              }
+
+              if (!keyForDecryption) {
+                return msg; // Still can't decrypt
+              }
+
+              const decryptedText = decryptMessage(
+                {
+                  cipherText: msg.encryptedMessage,
+                  nonce: msg.nonce,
+                  senderPublicKey: keyForDecryption,
+                },
+                mySecretKey,
+              );
+
+              if (decryptedText) {
+                return {
+                  ...msg,
+                  text: decryptedText,
+                  isDecrypted: true,
+                  decryptionFailed: false,
+                };
+              }
+
+              // If decryption still fails, mark as encrypted placeholder
+              return {
+                ...msg,
+                text: "🔒 [Unable to decrypt message]",
+                decryptionFailed: true,
+              };
+            } catch (error) {
+              // Decryption failed, mark as encrypted placeholder
+              return {
+                ...msg,
+                text: "🔒 [Decryption error]",
+                decryptionFailed: true,
+              };
+            }
+          }
+
+          return msg;
+        }),
+      );
+    }
+  }, [
+    otherUserPublicKey,
+    mySecretKey,
+    currentUserId,
+    e2eeReady,
+    messages.length,
+  ]);
+
   const scrollToEnd = useCallback(() => {
     if (listRef.current && messages.length > 0) {
       setTimeout(() => {
@@ -387,6 +528,18 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
   const handleNewMessage = useCallback(
     (msg) => {
       if (!msg?.sender || !otherUser?._id) return;
+
+      // CRITICAL: Skip decryption if keys aren't ready yet
+      if (!e2eeReady || !mySecretKey) {
+        console.warn(
+          "⚠️ E2EE not ready yet. Queuing message. e2eeReady:",
+          e2eeReady,
+          "mySecretKey:",
+          !!mySecretKey,
+        );
+        return; // Will be refetched when keys are ready
+      }
+
       const senderId =
         typeof msg.sender === "object" ? msg.sender._id : msg.sender;
       const receiverId =
@@ -400,61 +553,68 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
 
       if (!isFromOtherUser && !isFromCurrentUser) return;
 
-      // Decrypt message if it's encrypted
+      // Decrypt message if it's encrypted - ONLY if E2EE is ready
       let messageToAdd = msg;
-      if (
-        msg.isEncrypted &&
-        msg.encryptedMessage &&
-        msg.encryptedSymmetricKey &&
-        msg.nonce
-      ) {
+      if (msg.isEncrypted && msg.encryptedMessage && msg.nonce && e2eeReady) {
         try {
-          // Get sender's public key - prefer from message object, fallback to cached
-          let senderPublicKey =
-            typeof msg.sender === "object" ? msg.sender.publicKey : null;
+          // Determine encryption key
+          let keyForDecryption;
 
-          // If not in message object, use cached recipient key (for messages from other user)
-          if (!senderPublicKey && isFromOtherUser) {
-            senderPublicKey = otherUserPublicKey;
+          if (isFromOtherUser) {
+            keyForDecryption = msg.senderPublicKey;
+            if (
+              !keyForDecryption &&
+              typeof msg.sender === "object" &&
+              msg.sender.publicKey
+            ) {
+              keyForDecryption = msg.sender.publicKey;
+            }
+            if (!keyForDecryption) {
+              keyForDecryption = otherUserPublicKey;
+            }
+          } else {
+            // From me: use RECIPIENT'S key
+            keyForDecryption = otherUserPublicKey;
           }
 
-          // If still no key, can't decrypt
-          if (!senderPublicKey || !mySecretKey) {
+          // If no sender key available, can't decrypt
+          if (!keyForDecryption || !mySecretKey) {
+            console.warn(
+              `❌ Cannot decrypt socket message - missing key. MessageId: ${msg._id}, isFromOtherUser: ${isFromOtherUser}, hasKey: ${!!keyForDecryption}`,
+            );
             messageToAdd = {
               ...msg,
-              text: "🔒 Unable to decrypt message - missing keys",
-              isDecrypted: false,
+              text: "🔒 [Waiting for key...]",
+              decryptionFailed: true,
             };
           } else {
-            const decryptedText = decryptMessageE2EE(
-              msg.encryptedMessage,
-              msg.encryptedSymmetricKey,
-              msg.nonce,
-              senderPublicKey,
+            // Decrypt using the message object and receiver private key
+            const decryptedText = decryptMessage(
+              {
+                cipherText: msg.encryptedMessage,
+                nonce: msg.nonce,
+                senderPublicKey: keyForDecryption,
+              },
               mySecretKey,
             );
 
-            // CRITICAL: If decryption returns null/undefined, do NOT render empty message
-            if (!decryptedText || decryptedText.length === 0) {
-              console.error("❌ Decryption failed - returned empty result");
-              messageToAdd = {
-                ...msg,
-                text: "🔒 Unable to decrypt message - decryption failed",
-                isDecrypted: false,
-              };
-            } else {
-              messageToAdd = {
-                ...msg,
-                text: decryptedText,
-                isDecrypted: true,
-              };
-            }
+            console.log(
+              "✅ UI message text (socket):",
+              decryptedText ? "SUCCESS" : "FAILED",
+            );
+
+            messageToAdd = {
+              ...msg,
+              text: decryptedText || "🔒 [Decryption failed]",
+              decryptionFailed: !decryptedText,
+            };
           }
         } catch (error) {
+          console.error("❌ Decryption error in handleNewMessage:", error);
           messageToAdd = {
             ...msg,
-            text: "🔒 Unable to decrypt message - error occurred",
-            isDecrypted: false,
+            text: "🔒 [Decryption error]",
+            decryptionFailed: true,
           };
         }
       }
@@ -640,9 +800,25 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     let recipientKey = otherUserPublicKey;
 
     if (!recipientKey) {
-      const keyFetched = await fetchRecipientPublicKey(false);
+      // Force refresh the key (bypass cache)
+      const keyFetched = await fetchRecipientPublicKey(true);
       if (keyFetched) {
-        recipientKey = otherUserPublicKey;
+        // Update local reference after fetch
+        // We need to get the value from state/store, but hooks don't update immediately in the same closure
+        // So we might need to rely on the side-effect of fetchRecipientPublicKey setting state,
+        // OR better: the store returns it.
+        // Actually fetchRecipientPublicKey returns boolean currently.
+
+        // Let's rely on the store cache which should be populated now
+        try {
+          // We can sneakily peek at the store or just wait?
+          // Ideally fetchRecipientPublicKey should return the key.
+          // But for now, we'll try to get it from the store directly one more time
+          const freshKey = await fetchFromStore(otherUser._id, token);
+          recipientKey = freshKey;
+        } catch (e) {
+          // ignore
+        }
       } else {
         // DO NOT SEND PLAINTEXT - BLOCK THE MESSAGE
         setInputText(messageText);
@@ -663,19 +839,22 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       return;
     }
 
-    // STEP 3: Encrypt message with recipient's public key
+    // STEP 3: Encrypt message with recipient's public key (simple nacl.box)
     let messagePayload;
 
     try {
-      const { encryptedMessage, encryptedSymmetricKey, nonce } =
-        encryptMessageE2EE(messageText, recipientKey, mySecretKey);
+      const { cipherText, nonce } = encryptMessage(
+        messageText,
+        mySecretKey,
+        recipientKey,
+      );
 
       messagePayload = {
         receiverId: otherUser._id,
-        encryptedMessage,
-        encryptedSymmetricKey,
+        cipherText,
         nonce,
-        isEncrypted: true,
+        senderPublicKey: myPublicKey,
+        senderId: currentUserId,
       };
     } catch (error) {
       setInputText(messageText);
@@ -1376,9 +1555,16 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     const read = !!item.read;
     const isVoiceMessage = !!item.voiceMessage;
 
-    // ✅ Handle messages that are decrypting - show text or decrypting indicator
-    const messageText =
-      item.text || (item.isEncrypted ? "🔓 Decrypting..." : "");
+    // ✅ Handle encrypted messages gracefully:
+    // - If we have decrypted text, show it
+    // - If encrypted but no text yet, show a clear encrypted placeholder
+    const isEncrypted = !!item.isEncrypted;
+    const hasText = typeof item.text === "string" && item.text.length > 0;
+    const messageText = hasText
+      ? item.text
+      : isEncrypted
+        ? "🔒 Encrypted message"
+        : "";
 
     return (
       <TouchableOpacity
@@ -1492,39 +1678,131 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     );
   };
 
-  // E2EE Status Header Component
+  // E2EE Status Header Component - Now visible for every chat
   const E2EEStatusHeader = () => {
+    let headerText = "";
+    let headerColor = "#4CAF50"; // Default green
+    let backgroundColor = "#E8F5E9";
+    let borderColor = "#C8E6C9";
+    let iconName = "lock-closed"; // Default icon
+
     if (otherUserPublicKey && !publicKeyError) {
-      return (
-        <View
-          style={{
-            backgroundColor: "#E8F5E9",
-            borderBottomWidth: 1,
-            borderBottomColor: "#C8E6C9",
-            paddingHorizontal: 16,
-            paddingVertical: 12,
-            alignItems: "center",
-          }}
-        >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Ionicons name="" size={16} color="#4CAF50" />
-            <Text
-              style={{
-                fontSize: 12,
-                color: "#2E7D32",
-                fontWeight: "600",
-              }}
-            >
-              🔒 Messages are end-to-end encrypted !!
-            </Text>
-          </View>
-        </View>
-      );
+      // Encryption is set up
+      headerText = " Messages are end-to-end encrypted";
+      headerColor = "#2E7D32";
+      backgroundColor = "#E8F5E9";
+      borderColor = "#C8E6C9";
+      iconName = "lock-closed";
+    } else if (publicKeyError) {
+      // There's an error with encryption
+      headerText = " Encryption status unknown. Tap to retry.";
+      headerColor = "#FF9800"; // Orange
+      backgroundColor = "#FFF3E0";
+      borderColor = "#FFCC02";
+      iconName = "warning";
+    } else {
+      // Encryption not set up
+      headerText = " End-to-end encryption not set up.";
+      headerColor = "#F44336"; // Red
+      backgroundColor = "#FFEBEE";
+      borderColor = "#FFCDD2";
+      iconName = "lock-open";
     }
-    return null;
+
+    return (
+      <TouchableOpacity
+        style={{
+          backgroundColor,
+          borderBottomWidth: 1,
+          borderBottomColor: borderColor,
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          alignItems: "center",
+        }}
+        activeOpacity={publicKeyError ? 0.7 : 1}
+        onPress={() => {
+          if (publicKeyError) {
+            fetchRecipientPublicKey(true);
+          }
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Ionicons name={iconName} size={16} color={headerColor} />
+          <Text
+            style={{
+              fontSize: 12,
+              color: headerColor,
+              fontWeight: "600",
+            }}
+          >
+            {headerText}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
   };
 
   if (!otherUser) return null;
+
+  // Block chat UI until E2EE keys are ready
+  if (!e2eeReady) {
+    return (
+      <Modal
+        visible={visible}
+        animationType="slide"
+        transparent={false}
+        statusBarTranslucent
+        presentationStyle="fullScreen"
+        onRequestClose={onClose}
+      >
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : 0}
+        >
+          <View style={styles.header}>
+            <TouchableOpacity
+              onPress={() => {
+                onClose();
+              }}
+              style={styles.backButton}
+            >
+              <Ionicons
+                name="arrow-back"
+                size={24}
+                color={COLORS.textPrimary}
+              />
+            </TouchableOpacity>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
+            >
+              <View style={{ position: "relative" }}>
+                <Image
+                  source={{
+                    uri:
+                      otherUser.profileImg || "https://via.placeholder.com/40",
+                  }}
+                  style={styles.headerAvatar}
+                />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.headerName}>{otherUser.username} 🔒</Text>
+                <Text style={styles.lastSeenText}>
+                  Messages are end-to-end encrypted
+                </Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+            <Text style={{ marginTop: 16, color: COLORS.textSecondary }}>
+              Initializing end-to-end encryption...
+            </Text>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
 
   return (
     <Modal
@@ -1593,9 +1871,9 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
               )}
             </View>
             <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.headerName}>{otherUser.username}</Text>
+              <Text style={styles.headerName}>{otherUser.username} 🔒</Text>
               <Text style={styles.lastSeenText}>
-                {formatLastSeen(lastSeen, isOnline)}
+                Messages are end-to-end encrypted
               </Text>
             </View>
           </TouchableOpacity>
@@ -1773,19 +2051,19 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                   // Keep keyboard open on submit
                   inputRef.current?.focus();
                 }}
-                editable={!publicKeyError && !recipientKeyLoading}
+                // editable={!publicKeyError && !recipientKeyLoading} // Don't disable, let user try sending
               />
               {inputText.trim() ? (
                 <TouchableOpacity
                   style={[
                     styles.sendButton,
-                    (publicKeyError || recipientKeyLoading) && {
+                    recipientKeyLoading && {
                       opacity: 0.5,
                     },
                   ]}
                   onPress={sendMessage}
                   activeOpacity={0.7}
-                  disabled={!!publicKeyError || recipientKeyLoading}
+                  disabled={recipientKeyLoading}
                 >
                   <Ionicons name="send" size={20} color={COLORS.white} />
                 </TouchableOpacity>

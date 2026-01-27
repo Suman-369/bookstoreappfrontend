@@ -26,5 +26,8 @@
   },
   "submit": {
     "production": {}
+  },
+  "hooks": {
+    "postInstall": ["node ./scripts/create-google-services.js"]
   }
 }

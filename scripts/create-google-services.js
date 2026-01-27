@@ -1,6 +1,3 @@
-
-
-
 const fs = require("fs");
 const path = require("path");
 
@@ -49,40 +46,64 @@ if (!platform) {
 }
 
 const GOOGLE_SERVICES_JSON = process.env.GOOGLE_SERVICES_JSON;
-const OUTPUT_FILE = path.join(__dirname, "..", "google-services.json");
+const OUTPUT_FILE = path.join(
+  __dirname,
+  "..",
+  "android",
+  "app",
+  "google-services.json",
+);
 
-// Validate environment variable exists
-if (!GOOGLE_SERVICES_JSON) {
-  console.error(
-    "❌ Error: GOOGLE_SERVICES_JSON environment variable is not set",
-  );
-  console.error("");
-  console.error(
-    "This script requires the GOOGLE_SERVICES_JSON secret to be set in EAS.",
-  );
-  console.error("");
-  console.error("To set it up, run one of these commands:");
-  console.error("");
-  console.error("  # On macOS/Linux:");
-  console.error(
-    '  eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value "$(cat google-services.json)"',
-  );
-  console.error("");
-  console.error("  # On Windows (PowerShell):");
-  console.error("  $content = Get-Content google-services.json -Raw");
-  console.error(
-    "  eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value $content",
-  );
-  console.error("");
-  console.error("  # On Windows (CMD):");
-  console.error(
-    '  eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value "@google-services.json"',
-  );
-  process.exit(1);
+// Check if google-services.json already exists
+if (fs.existsSync(OUTPUT_FILE)) {
+  console.log("ℹ️  google-services.json already exists, skipping creation");
+  console.log(`📄 Existing file: ${OUTPUT_FILE}`);
+  process.exit(0);
 }
 
-// Validate that the environment variable is not empty
-if (GOOGLE_SERVICES_JSON.trim() === "") {
+// Validate environment variable exists or fall back to local file
+let googleServicesPath = path.join(__dirname, "..", "google-services.json");
+let useLocalFile = false;
+
+if (!GOOGLE_SERVICES_JSON) {
+  // Check if google-services.json exists locally
+  if (fs.existsSync(googleServicesPath)) {
+    console.log(
+      "ℹ️  GOOGLE_SERVICES_JSON environment variable not set, using local google-services.json",
+    );
+    useLocalFile = true;
+  } else {
+    console.error(
+      "❌ Error: GOOGLE_SERVICES_JSON environment variable is not set",
+    );
+    console.error("");
+    console.error(
+      "This script requires the GOOGLE_SERVICES_JSON secret to be set in EAS.",
+    );
+    console.error("");
+    console.error("To set it up, run one of these commands:");
+    console.error("");
+    console.error("  # On macOS/Linux:");
+    console.error(
+      '  eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value "$(cat google-services.json)"',
+    );
+    console.error("");
+    console.error("  # On Windows (PowerShell):");
+    console.error("  $content = Get-Content google-services.json -Raw");
+    console.error(
+      "  eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value $content",
+    );
+    console.error("");
+    console.error("  # On Windows (CMD):");
+    console.error(
+      '  eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value "@google-services.json"',
+    );
+    process.exit(1);
+  }
+}
+
+// Validate that the environment variable is not empty (if using env var)
+if (!useLocalFile && GOOGLE_SERVICES_JSON.trim() === "") {
   console.error("❌ Error: GOOGLE_SERVICES_JSON environment variable is empty");
   console.error("Please ensure the EAS secret contains valid JSON content.");
   process.exit(1);
@@ -91,40 +112,64 @@ if (GOOGLE_SERVICES_JSON.trim() === "") {
 try {
   // Parse to validate JSON
   let jsonContent;
-  try {
-    jsonContent = JSON.parse(GOOGLE_SERVICES_JSON);
-  } catch (parseError) {
-    // If parsing fails, check if it's a file path
-    if (fs.existsSync(GOOGLE_SERVICES_JSON)) {
-      console.log(
-        `ℹ️  GOOGLE_SERVICES_JSON appears to be a file path, reading from: ${GOOGLE_SERVICES_JSON}`,
+
+  // If using local file, read it directly
+  if (useLocalFile) {
+    try {
+      const fileContent = fs.readFileSync(googleServicesPath, "utf8");
+      jsonContent = JSON.parse(fileContent);
+    } catch (fileError) {
+      console.error(
+        "❌ Error: Could not read or parse local google-services.json",
       );
-      try {
-        const fileContent = fs.readFileSync(GOOGLE_SERVICES_JSON, "utf8");
-        jsonContent = JSON.parse(fileContent);
-      } catch (fileError) {
-        console.error(
-          "❌ Error: GOOGLE_SERVICES_JSON is a file path but could not read or parse the file",
+      console.error(`   File error: ${fileError.message}`);
+      console.error("");
+      console.error(
+        "Please verify that the file exists and contains valid JSON.",
+      );
+      process.exit(1);
+    }
+  } else {
+    // Parse from environment variable
+    try {
+      jsonContent = JSON.parse(GOOGLE_SERVICES_JSON);
+    } catch (parseError) {
+      // If parsing fails, check if it's a file path
+      if (fs.existsSync(GOOGLE_SERVICES_JSON)) {
+        console.log(
+          `ℹ️  GOOGLE_SERVICES_JSON appears to be a file path, reading from: ${GOOGLE_SERVICES_JSON}`,
         );
-        console.error(`   File error: ${fileError.message}`);
+        try {
+          const fileContent = fs.readFileSync(GOOGLE_SERVICES_JSON, "utf8");
+          jsonContent = JSON.parse(fileContent);
+        } catch (fileError) {
+          console.error(
+            "❌ Error: GOOGLE_SERVICES_JSON is a file path but could not read or parse the file",
+          );
+          console.error(`   File error: ${fileError.message}`);
+          console.error("");
+          console.error(
+            "Please verify that the file exists and contains valid JSON.",
+          );
+          process.exit(1);
+        }
+      } else {
+        console.error(
+          "❌ Error: GOOGLE_SERVICES_JSON contains invalid JSON and is not a valid file path",
+        );
+        console.error(`   Parse error: ${parseError.message}`);
         console.error("");
         console.error(
-          "Please verify that the file exists and contains valid JSON.",
+          "Please verify that the EAS secret was created correctly.",
+        );
+        console.error(
+          "The secret should contain the entire contents of google-services.json as a JSON string,",
+        );
+        console.error(
+          "or be set to the path of the google-services.json file.",
         );
         process.exit(1);
       }
-    } else {
-      console.error(
-        "❌ Error: GOOGLE_SERVICES_JSON contains invalid JSON and is not a valid file path",
-      );
-      console.error(`   Parse error: ${parseError.message}`);
-      console.error("");
-      console.error("Please verify that the EAS secret was created correctly.");
-      console.error(
-        "The secret should contain the entire contents of google-services.json as a JSON string,",
-      );
-      console.error("or be set to the path of the google-services.json file.");
-      process.exit(1);
     }
   }
 

@@ -34,6 +34,39 @@ const initPRNG = () => {
 // Initialize PRNG immediately on module load
 initPRNG();
 
+/**
+ * Validate a keypair - check format and length
+ * Returns: { valid: boolean, error?: string }
+ */
+export const validateKeyPair = (publicKey, secretKey) => {
+  try {
+    if (!publicKey || !secretKey) {
+      return { valid: false, error: "Missing publicKey or secretKey" };
+    }
+
+    const pubUint8 = base64ToUint8Array(publicKey);
+    const secUint8 = base64ToUint8Array(secretKey);
+
+    if (pubUint8.length !== nacl.box.publicKeyLength) {
+      return {
+        valid: false,
+        error: `Invalid publicKey length: ${pubUint8.length}, expected ${nacl.box.publicKeyLength}`,
+      };
+    }
+
+    if (secUint8.length !== nacl.box.secretKeyLength) {
+      return {
+        valid: false,
+        error: `Invalid secretKey length: ${secUint8.length}, expected ${nacl.box.secretKeyLength}`,
+      };
+    }
+
+    return { valid: true };
+  } catch (error) {
+    return { valid: false, error: error.message };
+  }
+};
+
 // Convert between base64 and Uint8Array
 export const base64ToUint8Array = (base64String) => {
   return new Uint8Array(base64.toByteArray(base64String));
@@ -85,194 +118,122 @@ export const generateNonce = () => {
 };
 
 /**
- * Generate a random symmetric key (256-bit)
+ * Encrypt a message using nacl.box (asymmetric encryption)
+ * Returns: { cipherText, nonce }
  */
-export const generateSymmetricKey = () => {
+export const encryptMessage = (text, senderPrivateKey, receiverPublicKey) => {
   try {
-    // Ensure PRNG is initialized
-    if (!nacl.random || typeof nacl.random !== "function") {
-      initPRNG();
+    if (!text || !senderPrivateKey || !receiverPublicKey) {
+      throw new Error("Missing encryption parameters");
     }
 
-    const key = nacl.randomBytes(32); // 256-bit key
-    return uint8ArrayToBase64(key);
-  } catch (error) {
-    console.error("❌ Symmetric key generation error:", error);
-    throw new Error(`Failed to generate symmetric key: ${error.message}`);
-  }
-};
+    const messageUint8 = new TextEncoder().encode(text);
+    const receiverPublicKeyUint8 = base64ToUint8Array(receiverPublicKey);
+    const senderPrivateKeyUint8 = base64ToUint8Array(senderPrivateKey);
+    const nonce = nacl.randomBytes(nacl.box.nonceLength);
 
-/**
- * Encrypt a message with a symmetric key
- * Uses ChaCha20-Poly1305 (authenticated encryption)
- */
-export const encryptMessage = (message, symmetricKeyBase64, nonceBase64) => {
-  try {
-    const messageUint8 = new TextEncoder().encode(message);
-    const symmetricKey = base64ToUint8Array(symmetricKeyBase64);
-    const nonce = base64ToUint8Array(nonceBase64);
-
-    // Use nacl.secretbox for symmetric encryption
-    const encrypted = nacl.secretbox(messageUint8, nonce, symmetricKey);
-
-    return {
-      ciphertext: uint8ArrayToBase64(encrypted),
-      nonce: nonceBase64,
-    };
-  } catch (error) {
-    throw new Error("Failed to encrypt message");
-  }
-};
-
-/**
- * Decrypt a message with a symmetric key
- */
-export const decryptMessage = (ciphertext, symmetricKeyBase64, nonceBase64) => {
-  try {
-    const ciphertextUint8 = base64ToUint8Array(ciphertext);
-    const symmetricKey = base64ToUint8Array(symmetricKeyBase64);
-    const nonce = base64ToUint8Array(nonceBase64);
-
-    const decrypted = nacl.secretbox.open(ciphertextUint8, nonce, symmetricKey);
-
-    if (!decrypted) {
-      throw new Error("Decryption failed - authentication failed");
+    // Validate key lengths
+    if (receiverPublicKeyUint8.length !== nacl.box.publicKeyLength) {
+      throw new Error(
+        `Invalid receiver public key length: ${receiverPublicKeyUint8.length}, expected ${nacl.box.publicKeyLength}`,
+      );
+    }
+    if (senderPrivateKeyUint8.length !== nacl.box.secretKeyLength) {
+      throw new Error(
+        `Invalid sender private key length: ${senderPrivateKeyUint8.length}, expected ${nacl.box.secretKeyLength}`,
+      );
     }
 
-    return new TextDecoder().decode(decrypted);
-  } catch (error) {
-    console.error("Message decryption error:", error);
-    throw new Error("Failed to decrypt message");
-  }
-};
-
-/**
- * Encrypt the symmetric key with recipient's public key
- * Uses Curve25519 + ChaCha20-Poly1305
- */
-export const encryptSymmetricKey = (
-  symmetricKeyBase64,
-  recipientPublicKeyBase64,
-  senderSecretKeyBase64,
-  nonceBase64,
-) => {
-  try {
-    const symmetricKey = base64ToUint8Array(symmetricKeyBase64);
-    const recipientPublicKey = base64ToUint8Array(recipientPublicKeyBase64);
-    const senderSecretKey = base64ToUint8Array(senderSecretKeyBase64);
-    const nonce = base64ToUint8Array(nonceBase64);
-
-    // Use nacl.box for asymmetric encryption
-    const encryptedKey = nacl.box(
-      symmetricKey,
+    // Encrypt message directly using nacl.box
+    const cipherText = nacl.box(
+      messageUint8,
       nonce,
-      recipientPublicKey,
-      senderSecretKey,
+      receiverPublicKeyUint8,
+      senderPrivateKeyUint8,
     );
 
-    return uint8ArrayToBase64(encryptedKey);
+    if (!cipherText) {
+      throw new Error("Message encryption failed");
+    }
+
+    return {
+      cipherText: uint8ArrayToBase64(cipherText),
+      nonce: uint8ArrayToBase64(nonce),
+    };
   } catch (error) {
-    console.error("Key encryption error:", error);
-    throw new Error("Failed to encrypt symmetric key");
+    console.error("❌ Message encryption error:", error.message || error);
+    throw error;
   }
 };
 
 /**
- * Decrypt the symmetric key with recipient's secret key
+ * Decrypt a message using nacl.box.open (asymmetric decryption)
+ * Returns: decrypted message text or null if decryption fails
  */
-export const decryptSymmetricKey = (
-  encryptedKeyBase64,
-  senderPublicKeyBase64,
-  recipientSecretKeyBase64,
-  nonceBase64,
-) => {
+export const decryptMessage = (msg, receiverPrivateKey) => {
   try {
-    const encryptedKey = base64ToUint8Array(encryptedKeyBase64);
-    const senderPublicKey = base64ToUint8Array(senderPublicKeyBase64);
-    const recipientSecretKey = base64ToUint8Array(recipientSecretKeyBase64);
-    const nonce = base64ToUint8Array(nonceBase64);
+    if (!msg || !receiverPrivateKey) {
+      console.warn("❌ Decryption failed - missing msg or receiverPrivateKey");
+      return null;
+    }
 
+    const { cipherText, nonce, senderPublicKey } = msg;
+    if (!cipherText || !nonce || !senderPublicKey) {
+      console.warn(
+        "❌ Decryption failed - missing cipherText, nonce, or senderPublicKey",
+      );
+      return null;
+    }
+
+    const cipherTextUint8 = base64ToUint8Array(cipherText);
+    const nonceUint8 = base64ToUint8Array(nonce);
+    const senderPublicKeyUint8 = base64ToUint8Array(senderPublicKey);
+    const receiverPrivateKeyUint8 = base64ToUint8Array(receiverPrivateKey);
+
+    // Validate key and nonce lengths
+    if (senderPublicKeyUint8.length !== nacl.box.publicKeyLength) {
+      console.warn(
+        `❌ Invalid sender public key length: ${senderPublicKeyUint8.length}, expected ${nacl.box.publicKeyLength}`,
+      );
+      return null;
+    }
+    if (receiverPrivateKeyUint8.length !== nacl.box.secretKeyLength) {
+      console.warn(
+        `❌ Invalid receiver private key length: ${receiverPrivateKeyUint8.length}, expected ${nacl.box.secretKeyLength}`,
+      );
+      return null;
+    }
+    if (nonceUint8.length !== nacl.box.nonceLength) {
+      console.warn(
+        `❌ Invalid nonce length: ${nonceUint8.length}, expected ${nacl.box.nonceLength}`,
+      );
+      return null;
+    }
+
+    // Decrypt message using nacl.box.open
     const decrypted = nacl.box.open(
-      encryptedKey,
-      nonce,
-      senderPublicKey,
-      recipientSecretKey,
+      cipherTextUint8,
+      nonceUint8,
+      senderPublicKeyUint8,
+      receiverPrivateKeyUint8,
     );
 
     if (!decrypted) {
-      throw new Error("Key decryption failed - authentication failed");
+      console.warn("❌ Message decryption failed - keys may not match");
+      return null;
     }
 
-    return uint8ArrayToBase64(decrypted);
+    const decryptedText = new TextDecoder().decode(decrypted);
+
+    if (!decryptedText || decryptedText.trim().length === 0) {
+      console.warn("❌ Decrypted message is empty");
+      return null;
+    }
+
+    return decryptedText;
   } catch (error) {
-    console.error("Key decryption error:", error);
-    throw new Error("Failed to decrypt symmetric key");
-  }
-};
-
-/**
- * Complete end-to-end encryption flow for a message
- * Returns: { encryptedMessage, encryptedSymmetricKey, nonce }
- */
-export const encryptMessageE2EE = (
-  message,
-  recipientPublicKeyBase64,
-  senderSecretKeyBase64,
-) => {
-  try {
-    // Generate fresh symmetric key and nonce for this message
-    const symmetricKey = generateSymmetricKey();
-    const nonce = generateNonce();
-
-    // Encrypt the message with symmetric key
-    const { ciphertext } = encryptMessage(message, symmetricKey, nonce);
-
-    // Encrypt the symmetric key with recipient's public key
-    const encryptedSymmetricKey = encryptSymmetricKey(
-      symmetricKey,
-      recipientPublicKeyBase64,
-      senderSecretKeyBase64,
-      nonce,
-    );
-
-    return {
-      encryptedMessage: ciphertext,
-      encryptedSymmetricKey,
-      nonce,
-    };
-  } catch (error) {
-    console.error("E2EE encryption error:", error);
-    throw error;
-  }
-};
-
-/**
- * Complete end-to-end decryption flow for a message
- * Returns: decrypted message text
- */
-export const decryptMessageE2EE = (
-  encryptedMessage,
-  encryptedSymmetricKey,
-  nonce,
-  senderPublicKeyBase64,
-  recipientSecretKeyBase64,
-) => {
-  try {
-    // Decrypt the symmetric key using recipient's secret key
-    const symmetricKey = decryptSymmetricKey(
-      encryptedSymmetricKey,
-      senderPublicKeyBase64,
-      recipientSecretKeyBase64,
-      nonce,
-    );
-
-    // Decrypt the message using the symmetric key
-    const message = decryptMessage(encryptedMessage, symmetricKey, nonce);
-
-    return message;
-  } catch (error) {
-    console.error("E2EE decryption error:", error);
-    throw error;
+    console.warn("❌ Decryption error:", error.message);
+    return null;
   }
 };
 

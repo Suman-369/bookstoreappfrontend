@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Your Meme's",
-    "slug": "book-store",
+    "slug": "meme",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -26,7 +26,7 @@
         "android.permission.VIBRATE",
         "android.permission.POST_NOTIFICATIONS"
       ],
-      "googleServicesFile": "./google-services.json"
+      "googleServicesFile": "./android/app/google-services.json"
     },
     "web": {
       "output": "static",
@@ -64,9 +64,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "f09896fc-0276-49d6-b1a1-ccc397a6c49d"
+        "projectId": "e47017b4-5ac0-4d0b-aacd-914eceeb0adc"
       }
     },
-    "owner": "suman369s-organization"
+    "owner": "health369s-organization"
   }
 }

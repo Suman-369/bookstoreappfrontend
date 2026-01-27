@@ -14,7 +14,7 @@ import { API_URL } from "../constants/api";
 import COLORS from "../constants/colors";
 import styles from "../assets/styles/conversationsModal.styles";
 import { formatLastSeen } from "../utils/dateUtils";
-import { decryptMessageE2EE } from "../utils/cryptoUtils";
+import { decryptMessage } from "../utils/cryptoUtils";
 import useKeyStorage from "../hooks/useKeyStorage";
 import { useRecipientPublicKeyStore } from "../store/recipientPublicKeyStore";
 import { useSocket } from "../hooks/useSocket";
@@ -29,7 +29,7 @@ export default function ConversationsModal({ visible, onClose, onStartChat }) {
   const [lastSeenMap, setLastSeenMap] = useState({});
   const [decryptedMessages, setDecryptedMessages] = useState({});
   const { secretKey } = useKeyStorage();
-  const { getRecipientPublicKey } = useRecipientPublicKeyStore();
+  const { cache, fetchRecipientPublicKey } = useRecipientPublicKeyStore();
   const { on, off } = useSocket(token);
 
   useEffect(() => {
@@ -76,40 +76,79 @@ export default function ConversationsModal({ visible, onClose, onStartChat }) {
     if (ids.length) fetchOnlineStatus(ids);
   }, [visible, token, view, conversations, friends, fetchOnlineStatus]);
 
+  // Automatically fetch keys for conversations that need them
+  useEffect(() => {
+    if (conversations.length > 0 && token) {
+      conversations.forEach((conv) => {
+        // If we don't have the key, fetch it
+        if (!cache[conv._id]) {
+          fetchRecipientPublicKey(conv._id, token).catch(() => { });
+        }
+      });
+    }
+  }, [conversations, token, cache, fetchRecipientPublicKey]);
+
   const decryptLastMessage = useCallback(
     (conversation) => {
       try {
         const { lastMessage } = conversation;
-        if (
-          !lastMessage ||
-          !lastMessage.text ||
-          !lastMessage.encryptedSymmetricKey ||
-          !lastMessage.nonce ||
-          !secretKey
-        ) {
+        // Basic validation
+        if (!lastMessage || !lastMessage.text) {
+          if (lastMessage?.isEncrypted) return "🔒 Encrypted message";
           return lastMessage?.text || "No messages yet";
         }
 
-        const senderPublicKey = getRecipientPublicKey(conversation._id);
-        if (!senderPublicKey) {
-          return lastMessage.text; // Fallback to encrypted text if no public key
+        // 1. Check if message is actually encrypted
+        const isEncrypted =
+          lastMessage.isEncrypted &&
+          lastMessage.encryptedMessage &&
+          lastMessage.nonce;
+
+        if (!isEncrypted) {
+          return lastMessage.text;
         }
 
-        const decrypted = decryptMessageE2EE(
-          lastMessage.text,
-          lastMessage.encryptedSymmetricKey,
-          lastMessage.nonce,
-          senderPublicKey,
+        if (!secretKey) {
+          return "🔒 Encrypted message";
+        }
+
+        // 2. Identify the other user in this conversation
+        // 'conversation' is the User object of the chat partner
+        const otherUserId = conversation._id;
+
+        // 3. Determine which key to use for decryption
+        // If message is from THEM, we use THEIR public key (try msg.senderPublicKey first, then cache)
+        // If message is from ME, we use THE RECIPIENT'S public key (which is otherUserId's key)
+        const isFromOtherUser = lastMessage.sender === otherUserId;
+
+        // If from other user, prefer the key attached to the message
+        let keyForDecryption = isFromOtherUser ? lastMessage.senderPublicKey : null;
+
+        // Fallback to cached key for this user
+        if (!keyForDecryption) {
+          keyForDecryption = cache[otherUserId]?.publicKey;
+        }
+
+        if (!keyForDecryption) {
+          return "🔒 Encrypted message"; // Key not found yet
+        }
+
+        const decrypted = decryptMessage(
+          {
+            cipherText: lastMessage.encryptedMessage,
+            nonce: lastMessage.nonce,
+            senderPublicKey: keyForDecryption,
+          },
           secretKey,
         );
 
-        return decrypted;
+        return decrypted || "🔒 Decryption failed";
       } catch (error) {
-        console.warn("Failed to decrypt last message:", error);
-        return lastMessage?.text || "No messages yet";
+        // console.warn("Failed to decrypt last message:", error);
+        return "🔒 Encrypted message";
       }
     },
-    [secretKey, getRecipientPublicKey],
+    [secretKey, cache],
   );
 
   const fetchConversations = async () => {
@@ -125,6 +164,8 @@ export default function ConversationsModal({ visible, onClose, onStartChat }) {
 
       // Decrypt last messages
       if (secretKey && convsData.length > 0) {
+        // Trigger a re-render/re-calc of decrypted messages when keys availability changes
+        // For now, we just map immediately
         const decrypted = {};
         convsData.forEach((conv) => {
           decrypted[conv._id] = decryptLastMessage(conv);
@@ -156,6 +197,17 @@ export default function ConversationsModal({ visible, onClose, onStartChat }) {
     }
   };
 
+  // Re-run decryption when cache updates (keys arrive)
+  useEffect(() => {
+    if (conversations.length > 0 && secretKey) {
+      const decrypted = {};
+      conversations.forEach((conv) => {
+        decrypted[conv._id] = decryptLastMessage(conv);
+      });
+      setDecryptedMessages(decrypted);
+    }
+  }, [cache, conversations, secretKey, decryptLastMessage]);
+
   // Handle incoming messages and update decrypted messages
   useEffect(() => {
     if (!visible || !secretKey) return;
@@ -164,43 +216,48 @@ export default function ConversationsModal({ visible, onClose, onStartChat }) {
       console.log("📨 New message received in ConversationsModal:", data);
       try {
         // Handle different possible data structures
-        const conversationId =
-          data.conversationId || data.recipientId || data.senderId;
+        // In this app, data is usually the message object directly
         const message = data.message || data;
 
-        if (!conversationId || !message || !message.text) {
-          console.warn("Invalid message data:", data);
+        // Determine conversation ID (Partner's ID)
+        let conversationId;
+        const senderId = typeof message.sender === 'object' ? message.sender._id : message.sender;
+        const receiverId = typeof message.receiver === 'object' ? message.receiver._id : message.receiver;
+
+        if (senderId === currentUser._id) {
+          conversationId = receiverId; // I sent it, so conversation is with receiver
+        } else {
+          conversationId = senderId; // They sent it, so conversation is with sender
+        }
+
+        if (!conversationId) {
+          console.warn("Could not determine conversationId", message);
           return;
         }
 
+        // Try to decrypt if encrypted
         let decryptedText = message.text;
-        console.log("🔐 Attempting to decrypt message:", {
-          hasEncryptedKey: !!message.encryptedSymmetricKey,
-          hasNonce: !!message.nonce,
-          hasSecretKey: !!secretKey,
-        });
+        const isEncrypted = message.isEncrypted && message.encryptedMessage && message.nonce;
 
-        // Try to decrypt if encrypted fields are present
-        if (message.encryptedSymmetricKey && message.nonce && secretKey) {
-          const senderPublicKey = getRecipientPublicKey(conversationId);
-          console.log("🔑 Got sender public key:", !!senderPublicKey);
+        if (isEncrypted && secretKey) {
+          // If NEW message comes via socket...
+          // If from them: try using the key on the message
+          // If from me: try using cached key
+          let keyForDecryption;
 
-          if (senderPublicKey) {
-            try {
-              decryptedText = decryptMessageE2EE(
-                message.text,
-                message.encryptedSymmetricKey,
-                message.nonce,
-                senderPublicKey,
-                secretKey,
-              );
-              console.log("✅ Message decrypted successfully:", decryptedText);
-            } catch (decryptError) {
-              console.error("❌ Decryption failed:", decryptError);
-              decryptedText = message.text;
-            }
+          if (senderId !== currentUser._id) {
+            keyForDecryption = message.senderPublicKey || cache[conversationId]?.publicKey;
           } else {
-            console.warn("⚠️ No sender public key found for:", conversationId);
+            keyForDecryption = cache[conversationId]?.publicKey;
+          }
+
+          if (keyForDecryption) {
+            const result = decryptMessage({
+              cipherText: message.encryptedMessage,
+              nonce: message.nonce,
+              senderPublicKey: keyForDecryption
+            }, secretKey);
+            if (result) decryptedText = result;
           }
         }
 
@@ -212,18 +269,37 @@ export default function ConversationsModal({ visible, onClose, onStartChat }) {
             ...prev,
             [conversationId]: decryptedText,
           };
-          console.log("📝 Decrypted messages updated:", updated);
           return updated;
         });
 
         // Update conversation's last message
         setConversations((prev) => {
+          // Check if conversation exists
+          const exists = prev.some(c => c._id === conversationId);
+
+          if (!exists) {
+            // If we received a message from a new user not in list, we should technically re-fetch list
+            // But for now, we leave it. The user can refresh.
+            return prev;
+          }
+
           const updated = prev.map((conv) =>
             conv._id === conversationId
-              ? { ...conv, lastMessage: message }
+              ? {
+                ...conv,
+                lastMessage: message,
+                unreadCount: (conv.unreadCount || 0) + (senderId !== currentUser._id ? 1 : 0)
+              }
               : conv,
           );
-          console.log("🔄 Conversations updated");
+
+          // Sort to put newest first
+          updated.sort((a, b) => {
+            const dateA = new Date(a.lastMessage?.createdAt || 0);
+            const dateB = new Date(b.lastMessage?.createdAt || 0);
+            return dateB - dateA;
+          });
+
           return updated;
         });
       } catch (error) {
@@ -232,16 +308,12 @@ export default function ConversationsModal({ visible, onClose, onStartChat }) {
     };
 
     // Listen to multiple possible event names
-    on("newMessage", handleNewMessage);
-    on("message", handleNewMessage);
-    on("receiveMessage", handleNewMessage);
+    on("new_message", handleNewMessage);
 
     return () => {
-      off("newMessage", handleNewMessage);
-      off("message", handleNewMessage);
-      off("receiveMessage", handleNewMessage);
+      off("new_message", handleNewMessage);
     };
-  }, [visible, secretKey, getRecipientPublicKey, on, off]);
+  }, [visible, secretKey, cache, on, off, currentUser?._id]);
 
   const handleNewMessage = () => {
     setView("new");
