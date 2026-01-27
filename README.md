@@ -45,6 +45,20 @@ This project requires `google-services.json` for Android builds. The file is not
 2. Place it in the `mobile/` directory (same level as `app.json`)
 3. The file will be automatically ignored by git
 
+### Manual Setup (if needed)
+
+If you need to manually run the setup script (e.g., for local testing or troubleshooting):
+
+```bash
+# For Android builds
+npm run setup:android -- --platform android
+
+# For iOS builds (though google-services.json is Android-specific)
+npm run setup:android -- --platform ios
+```
+
+Note: The script will automatically detect the platform from environment variables set by EAS Build. The `--platform` flag is optional but can be used to override.
+
 ### For EAS Build
 
 The `google-services.json` file is automatically created during EAS builds from an EAS secret.
@@ -57,11 +71,11 @@ The `google-services.json` file is automatically created during EAS builds from 
    ```bash
    # On macOS/Linux:
    eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value "$(cat google-services.json)"
-   
+
    # On Windows (PowerShell):
    $content = Get-Content google-services.json -Raw
    eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value $content
-   
+
    # On Windows (CMD):
    eas secret:create --scope project --name GOOGLE_SERVICES_JSON --value "@google-services.json"
    ```

@@ -7,31 +7,35 @@
     "icon": "./assets/images/icon.png",
     "scheme": "mobile",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+
     "ios": {
       "supportsTablet": true
     },
+
     "android": {
+      "package": "com.yourmemes.app",
+      "googleServicesFile": "./google-services.json",
+
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "backgroundImage": "./assets/images/android-icon-background.png"
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#E6F4FE"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
-      "package": "bookstore.com",
+
       "permissions": [
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE",
-        "android.permission.RECEIVE_BOOT_COMPLETED",
-        "android.permission.VIBRATE",
-        "android.permission.POST_NOTIFICATIONS"
+        "POST_NOTIFICATIONS"
       ],
-      "googleServicesFile": "./android/app/google-services.json"
+
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
     },
+
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.ico"
     },
+
     "plugins": [
       "expo-router",
       [
@@ -39,7 +43,6 @@
         {
           "icon": "./assets/images/icon.png",
           "color": "#1976D2",
-          "sounds": [],
           "defaultChannel": "default",
           "mode": "production"
         }
@@ -57,16 +60,19 @@
         }
       ]
     ],
+
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
+
     "extra": {
       "router": {},
       "eas": {
         "projectId": "e47017b4-5ac0-4d0b-aacd-914eceeb0adc"
       }
     },
+
     "owner": "health369s-organization"
   }
 }

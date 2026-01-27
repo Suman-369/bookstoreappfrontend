@@ -3,16 +3,16 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
-    "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
-    "web": "expo start --web",
-    "lint": "expo lint",
-    "vercel-build": "expo export",
-    "generate-icons": "node ./scripts/generate-icons.js",
-    "create-google-services": "node ./scripts/create-google-services.js"
-  },
+  "start": "expo start",
+  "reset-project": "node ./scripts/reset-project.js",
+  "android": "expo run:android",
+  "ios": "expo run:ios",
+  "web": "expo start --web",
+  "lint": "expo lint",
+  "vercel-build": "expo export",
+  "generate-icons": "node ./scripts/generate-icons.js",
+  "postinstall": "node ./scripts/create-google-services.js"
+},
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -59,4 +59,4 @@
     "typescript": "~5.9.2"
   },
   "private": true
-}
+} 
