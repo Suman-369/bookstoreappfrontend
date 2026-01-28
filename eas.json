@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": ">= 16.28.0",
+    "version": ">= 12.0.0",
     "appVersionSource": "remote"
   },
   "build": {
@@ -8,19 +8,35 @@
       "developmentClient": true,
       "distribution": "internal",
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug --quiet",
+        "env": {
+          "EXPO_USE_EXOTIC": "false",
+          "NODE_OPTIONS": "--max-old-space-size=4096"
+        }
       }
     },
     "preview": {
       "distribution": "internal",
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease --quiet",
+        "env": {
+          "EXPO_USE_EXOTIC": "false",
+          "NODE_OPTIONS": "--max-old-space-size=4096"
+        }
       }
     },
     "production": {
       "autoIncrement": true,
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease --quiet",
+        "env": {
+          "EXPO_USE_EXOTIC": "false",
+          "NODE_OPTIONS": "--max-old-space-size=4096",
+          "GOOGLE_SERVICES_JSON": "{\"project_info\":{\"project_number\":\"587715486845\",\"project_id\":\"your-meme-s\",\"storage_bucket\":\"your-meme-s.firebasestorage.app\"},\"client\":[{\"client_info\":{\"mobilesdk_app_id\":\"1:587715486845:android:ff7f0ffbbfad2f45d43d14\",\"android_client_info\":{\"package_name\":\"com.yourmemes.app\"}},\"oauth_client\":[],\"api_key\":[{\"current_key\":\"AIzaSyCcn8DU7yMvdE9wox7XJZnUOfOR2OGgLic\"}],\"services\":{\"appinvite_service\":{\"other_platform_oauth_client\":[]}}}],\"configuration_version\":\"1\"}"
+        }
       }
     }
   },

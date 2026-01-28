@@ -1,41 +1,34 @@
 {
   "expo": {
     "name": "Your Meme's",
-    "slug": "meme",
+    "slug": "yourmemes-app-build",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "mobile",
     "userInterfaceStyle": "automatic",
-
     "ios": {
       "supportsTablet": true
     },
-
     "android": {
       "package": "com.yourmemes.app",
-      "googleServicesFile": "./google-services.json",
-
+      "googleServicesFile": "google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#E6F4FE"
       },
-
       "permissions": [
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE",
         "POST_NOTIFICATIONS"
       ],
-
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
-
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.ico"
     },
-
     "plugins": [
       "expo-router",
       [
@@ -60,19 +53,16 @@
         }
       ]
     ],
-
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "e47017b4-5ac0-4d0b-aacd-914eceeb0adc"
+        "projectId": "d1cd5169-7a16-4cf5-a8ce-5e4a15e7d856"
       }
     },
-
     "owner": "health369s-organization"
   }
 }
