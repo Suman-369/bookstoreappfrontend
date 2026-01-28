@@ -219,7 +219,7 @@ export const decryptMessage = (msg, receiverPrivateKey) => {
     );
 
     if (!decrypted) {
-      console.warn("❌ Message decryption failed - keys may not match");
+      // Silently fail for better UX - don't spam console
       return null;
     }
 
@@ -232,7 +232,7 @@ export const decryptMessage = (msg, receiverPrivateKey) => {
 
     return decryptedText;
   } catch (error) {
-    console.warn("❌ Decryption error:", error.message);
+    // Silently handle decryption errors to prevent console spam
     return null;
   }
 };
@@ -382,13 +382,13 @@ export const decryptBinaryData = (encryptedData, receiverPrivateKey) => {
     );
 
     if (!decrypted) {
-      console.warn("❌ Binary data decryption failed - keys may not match");
+      // Silently fail for better UX - don't spam console
       return null;
     }
 
     return decrypted;
   } catch (error) {
-    console.warn("❌ Binary decryption error:", error.message);
+    // Silently handle binary decryption errors to prevent console spam
     return null;
   }
 };

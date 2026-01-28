@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  memo,
+  useMemo,
+} from "react";
 import {
   Modal,
   View,
@@ -158,11 +165,6 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                 senderPublicKey: keyForDecryption,
               },
               mySecretKey,
-            );
-
-            console.log(
-              "✅ UI message text (fetch):",
-              decryptedText ? "SUCCESS" : "FAILED",
             );
 
             // If decryption fails (null/empty), show a safe placeholder
@@ -604,11 +606,6 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
               mySecretKey,
             );
 
-            console.log(
-              "✅ UI message text (socket):",
-              decryptedText ? "SUCCESS" : "FAILED",
-            );
-
             messageToAdd = {
               ...msg,
               text: decryptedText || "🔒 [Decryption failed]",
@@ -1041,6 +1038,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
+        shouldDuckAndroid: false,
       });
 
       const { recording: newRecording } = await Audio.Recording.createAsync(
@@ -1058,6 +1056,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         setRecordingDuration((prev) => prev + 1);
       }, 1000);
     } catch (err) {
+      console.warn("Failed to start recording:", err.message);
       Alert.alert("Error", "Failed to start recording");
     }
   };
@@ -1108,7 +1107,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         recordingTimerRef.current = null;
       }
     } catch (err) {
-      console.error("Failed to pause recording", err);
+      console.warn("Failed to pause recording:", err.message);
       Alert.alert("Error", "Failed to pause recording");
     }
   };
@@ -1125,6 +1124,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         }, 1000);
       }
     } catch (err) {
+      console.warn("Failed to resume recording:", err.message);
       Alert.alert("Error", "Failed to resume recording");
     }
   };
@@ -1144,7 +1144,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       setRecording(null);
       setRecordingDuration(0);
     } catch (err) {
-      console.error("Failed to cancel recording", err);
+      console.warn("Failed to cancel recording:", err.message);
       setRecording(null);
       setIsRecording(false);
       setRecordingDuration(0);
@@ -1224,24 +1224,11 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       });
 
       // STEP 4: Encrypt the voice data
-      console.log("🔐 Encrypting voice message:", {
-        voiceDataSize: voiceFileData.length,
-        hasMySecretKey: !!mySecretKey,
-        hasRecipientKey: !!recipientKey,
-        myPublicKey: myPublicKey?.substring(0, 10) + "...",
-        recipientKey: recipientKey?.substring(0, 10) + "...",
-      });
-
       const { cipherText, nonce } = encryptBinaryData(
         voiceFileData,
         mySecretKey,
         recipientKey,
       );
-
-      console.log("✅ Voice message encrypted:", {
-        cipherTextSize: cipherText.length,
-        nonceSize: nonce.length,
-      });
 
       // STEP 5: Send encrypted voice message
       const messagePayload = {
@@ -1337,10 +1324,14 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       try {
         await soundRef.current.unloadAsync();
       } catch (err) {
-        console.error("Error unloading sound:", err);
+        // Silently handle unload errors to prevent UI glitches
+        if (err.message && !err.message.includes("unloaded")) {
+          console.warn("Error unloading sound:", err.message);
+        }
       }
       soundRef.current = null;
     }
+    // Batch state updates to prevent multiple re-renders
     setPlayingMessageId(null);
     setPlaybackProgress(0);
     setIsLoadingAudio(false);
@@ -1348,70 +1339,87 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
 
   const playVoiceMessage = useCallback(
     async (messageId, voiceUrl, duration) => {
-      // If same message is playing, pause/resume it
-      if (playingMessageId === messageId && soundRef.current) {
-        try {
-          const status = await soundRef.current.getStatusAsync();
-          if (status.isLoaded) {
-            if (status.isPlaying) {
-              // Pause
-              await soundRef.current.pauseAsync();
-              if (playbackTimerRef.current) {
-                clearInterval(playbackTimerRef.current);
-                playbackTimerRef.current = null;
-              }
-              setPlayingMessageId(null);
-              return;
-            } else if (status.isLoaded && !status.isPlaying) {
-              // Resume
-              await soundRef.current.playAsync();
-              // Restart progress tracking
-              const totalDuration = duration || 0;
-              playbackTimerRef.current = setInterval(async () => {
-                try {
-                  const status = await soundRef.current.getStatusAsync();
-                  if (status.isLoaded && status.positionMillis !== undefined) {
-                    const progress =
-                      totalDuration > 0
-                        ? status.positionMillis / 1000 / totalDuration
-                        : 0;
-                    setPlaybackProgress(Math.min(progress, 1));
+      try {
+        // If same message is playing, pause/resume it
+        if (playingMessageId === messageId && soundRef.current) {
+          try {
+            const status = await soundRef.current.getStatusAsync();
+            if (status.isLoaded) {
+              if (status.isPlaying) {
+                // Pause
+                await soundRef.current.pauseAsync();
+                if (playbackTimerRef.current) {
+                  clearInterval(playbackTimerRef.current);
+                  playbackTimerRef.current = null;
+                }
+                setPlayingMessageId(null);
+                return;
+              } else if (status.isLoaded && !status.isPlaying) {
+                // Resume
+                await soundRef.current.playAsync();
+                // Restart progress tracking with reduced frequency
+                const totalDuration = duration || 0;
+                playbackTimerRef.current = setInterval(async () => {
+                  try {
+                    if (!soundRef.current) return;
 
-                    // Check if finished
+                    const status = await soundRef.current.getStatusAsync();
                     if (
-                      status.didJustFinish ||
-                      (status.positionMillis >= status.durationMillis &&
-                        status.durationMillis > 0)
+                      status.isLoaded &&
+                      status.positionMillis !== undefined
                     ) {
-                      stopAudioPlayback();
+                      const progress =
+                        totalDuration > 0
+                          ? status.positionMillis / 1000 / totalDuration
+                          : 0;
+                      setPlaybackProgress(Math.min(progress, 1));
+
+                      // Check if finished
+                      if (
+                        status.didJustFinish ||
+                        (status.positionMillis >= status.durationMillis &&
+                          status.durationMillis > 0)
+                      ) {
+                        stopAudioPlayback();
+                      }
+                    }
+                  } catch (err) {
+                    // Silently handle errors to prevent UI glitches
+                    if (err.message && !err.message.includes("unloaded")) {
+                      console.warn("Playback status error:", err.message);
                     }
                   }
-                } catch (err) {
-                  console.error("Error getting playback status:", err);
-                }
-              }, 100);
-              setPlayingMessageId(messageId);
-              return;
+                }, 250); // Reduced frequency from 100ms to 250ms
+                setPlayingMessageId(messageId);
+                return;
+              }
             }
+          } catch (err) {
+            console.warn("Error toggling audio:", err.message);
+            // Reset state on error
+            await stopAudioPlayback();
           }
-        } catch (err) {
-          console.error("Error toggling audio:", err);
         }
-      }
 
-      // Stop any currently playing audio
-      await stopAudioPlayback();
+        // Stop any currently playing audio
+        await stopAudioPlayback();
 
-      // Start loading new audio
-      setIsLoadingAudio(true);
-      setPlayingMessageId(messageId);
+        // Validate voice URL before proceeding
+        if (!voiceUrl) {
+          Alert.alert("Error", "Voice message URL is not available.");
+          return;
+        }
 
-      try {
-        // Set audio mode for playback
+        // Start loading new audio
+        setIsLoadingAudio(true);
+        setPlayingMessageId(messageId);
+
+        // Set audio mode for playback only once
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
           staysActiveInBackground: false,
+          shouldDuckAndroid: false,
         });
 
         // Load and play the sound
@@ -1420,23 +1428,23 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           { shouldPlay: true },
         );
 
-        // Set up status update listener
+        // Set up status update listener with reduced logging
         sound.setOnPlaybackStatusUpdate((status) => {
-          if (status.isLoaded) {
-            if (status.didJustFinish) {
-              // Audio finished playing
-              stopAudioPlayback();
-            }
+          if (status.isLoaded && status.didJustFinish) {
+            // Audio finished playing
+            stopAudioPlayback();
           }
         });
 
         soundRef.current = sound;
 
-        // Start progress tracking
+        // Start progress tracking with reduced frequency
         const totalDuration = duration || 0;
         playbackTimerRef.current = setInterval(async () => {
           try {
-            const status = await sound.getStatusAsync();
+            if (!soundRef.current) return;
+
+            const status = await soundRef.current.getStatusAsync();
             if (status.isLoaded && status.positionMillis !== undefined) {
               const progress =
                 totalDuration > 0
@@ -1454,17 +1462,42 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
               }
             }
           } catch (err) {
-            console.error("Error getting playback status:", err);
+            // Silently handle errors to prevent UI glitches
+            if (err.message && !err.message.includes("unloaded")) {
+              console.warn("Playback progress error:", err.message);
+            }
           }
-        }, 100);
+        }, 250); // Reduced frequency from 100ms to 250ms
 
         setIsLoadingAudio(false);
       } catch (err) {
-        console.error("Error playing voice message:", err);
-        Alert.alert("Error", "Failed to play voice message");
+        console.warn("Error playing voice message:", err.message);
+
+        // Reset all playback state on error
         setIsLoadingAudio(false);
         setPlayingMessageId(null);
         setPlaybackProgress(0);
+
+        // Clean up any partial audio setup
+        if (soundRef.current) {
+          try {
+            await soundRef.current.unloadAsync();
+          } catch (cleanupErr) {
+            // Ignore cleanup errors
+          }
+          soundRef.current = null;
+        }
+
+        if (playbackTimerRef.current) {
+          clearInterval(playbackTimerRef.current);
+          playbackTimerRef.current = null;
+        }
+
+        // Show user-friendly error message
+        Alert.alert(
+          "Playback Error",
+          "Unable to play this voice message. The file may be corrupted or incompatible.",
+        );
       }
     },
     [playingMessageId, stopAudioPlayback],
@@ -1518,26 +1551,75 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     ]);
   }, [otherUser, token, isBlocked, onClose]);
 
-  const VoiceMessagePlayer = ({ message, isSent }) => {
+  const VoiceMessagePlayer = memo(({ message, isSent }) => {
     const messageId = message._id;
     const [decryptedVoiceUrl, setDecryptedVoiceUrl] = useState(null);
     const [isDecrypting, setIsDecrypting] = useState(false);
+    const [decryptionFailed, setDecryptionFailed] = useState(false);
     const decryptionRef = useRef(false);
 
-    // Handle both encrypted and unencrypted voice messages
-    const isEncryptedVoice =
-      message.isEncrypted && message.encryptedVoiceMessage;
-    const voiceUrl = isEncryptedVoice
-      ? decryptedVoiceUrl
-      : message.voiceMessage?.url;
-    const duration = isEncryptedVoice
-      ? message.encryptedVoiceMessage?.duration || 0
-      : message.voiceMessage?.duration || 0;
+    // Memoize voice message properties to prevent unnecessary re-renders
+    const isEncryptedVoice = useMemo(
+      () => message.isEncrypted && message.encryptedVoiceMessage,
+      [message.isEncrypted, message.encryptedVoiceMessage],
+    );
 
-    const isPlaying = playingMessageId === messageId;
-    const currentProgress = isPlaying ? playbackProgress : 0;
-    const isLoading =
-      (isLoadingAudio && playingMessageId === messageId) || isDecrypting;
+    const voiceUrl = useMemo(
+      () => (isEncryptedVoice ? decryptedVoiceUrl : message.voiceMessage?.url),
+      [isEncryptedVoice, decryptedVoiceUrl, message.voiceMessage?.url],
+    );
+
+    const duration = useMemo(
+      () =>
+        isEncryptedVoice
+          ? message.encryptedVoiceMessage?.duration || 0
+          : message.voiceMessage?.duration || 0,
+      [
+        isEncryptedVoice,
+        message.encryptedVoiceMessage?.duration,
+        message.voiceMessage?.duration,
+      ],
+    );
+
+    // Memoize playing state to prevent re-renders when other messages change
+    const isPlaying = useMemo(
+      () => playingMessageId === messageId,
+      [playingMessageId, messageId],
+    );
+    const currentProgress = useMemo(
+      () => (isPlaying ? playbackProgress : 0),
+      [isPlaying, playbackProgress],
+    );
+    const isLoading = useMemo(
+      () => (isLoadingAudio && playingMessageId === messageId) || isDecrypting,
+      [isLoadingAudio, playingMessageId, messageId, isDecrypting],
+    );
+
+    // Memoize waveform bars to prevent re-creation on every render
+    const waveformBars = useMemo(() => {
+      const bars = [];
+      for (let index = 0; index < 14; index++) {
+        const ratio = (index + 1) / 14;
+        const isActive = ratio <= currentProgress || currentProgress === 0;
+        const heightPattern = 6 + (index % 4) * 4;
+
+        let barColor;
+        if (decryptionFailed) {
+          barColor = "rgba(255, 107, 107, 0.6)";
+        } else if (isSent) {
+          barColor = isActive ? "rgba(0,0,0,0.9)" : "rgba(0,0,0,0.35)";
+        } else {
+          barColor = isActive ? COLORS.primary : "rgba(0,0,0,0.12)";
+        }
+
+        bars.push({
+          key: `bar-${index}`,
+          height: heightPattern,
+          backgroundColor: barColor,
+        });
+      }
+      return bars;
+    }, [currentProgress, decryptionFailed, isSent]);
 
     // Decrypt voice message when component mounts or when keys become available
     useEffect(() => {
@@ -1545,6 +1627,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         if (
           !isEncryptedVoice ||
           decryptedVoiceUrl ||
+          decryptionFailed ||
           !e2eeReady ||
           !mySecretKey ||
           decryptionRef.current
@@ -1555,55 +1638,36 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         const { cipherText, nonce, senderPublicKey } =
           message.encryptedVoiceMessage;
         if (!cipherText || !nonce || !senderPublicKey) {
-          console.warn("❌ Missing encrypted voice message data");
+          setDecryptionFailed(true);
           return;
         }
 
         try {
           decryptionRef.current = true;
           setIsDecrypting(true);
+          setDecryptionFailed(false);
 
-          console.log("🔓 Attempting to decrypt voice message:", {
-            messageId,
-            hasCipherText: !!cipherText,
-            hasNonce: !!nonce,
-            hasSenderPublicKey: !!senderPublicKey,
-            hasMySecretKey: !!mySecretKey,
-            senderPublicKeyPreview: senderPublicKey?.substring(0, 10) + "...",
-            mySecretKeyPreview: mySecretKey?.substring(0, 10) + "...",
-          });
-
-          // For voice messages, we need to determine the correct sender public key
-          // If this is a message I sent, the senderPublicKey should be my public key
-          // If this is a message from the other user, the senderPublicKey should be their public key
+          // Determine the correct key for decryption
           const senderId =
             typeof message.sender === "object"
               ? message.sender._id
               : message.sender;
           const isFromMe = senderId === currentUserId;
 
-          let actualSenderPublicKey = senderPublicKey;
+          let keyForDecryption;
 
-          // If the message is from me, I need to use the recipient's public key for decryption
-          // If the message is from them, I need to use their public key for decryption
           if (isFromMe) {
             // Message from me: I encrypted it with my secret key + their public key
             // To decrypt: I need my secret key + their public key
-            actualSenderPublicKey = otherUserPublicKey;
-            console.log(
-              "🔓 Decrypting my own voice message, using recipient's public key",
-            );
+            keyForDecryption = otherUserPublicKey;
           } else {
             // Message from them: They encrypted it with their secret key + my public key
             // To decrypt: I need my secret key + their public key
-            actualSenderPublicKey = senderPublicKey;
-            console.log(
-              "🔓 Decrypting their voice message, using sender's public key",
-            );
+            keyForDecryption = senderPublicKey;
           }
 
-          if (!actualSenderPublicKey) {
-            console.warn("❌ Cannot decrypt - missing sender public key");
+          if (!keyForDecryption) {
+            setDecryptionFailed(true);
             return;
           }
 
@@ -1614,31 +1678,45 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           // Check if file already exists before decrypting
           const fileInfo = await FileSystem.getInfoAsync(tempFileUri);
           if (fileInfo.exists) {
-            console.log(
-              "✅ Voice file already exists, using cached file:",
-              tempFileUri,
-            );
             setDecryptedVoiceUrl(tempFileUri);
             return;
           }
 
-          // Decrypt the voice data
-          const decryptedData = decryptBinaryData(
-            { cipherText, nonce, senderPublicKey: actualSenderPublicKey },
+          // Try decryption with the determined key
+          let decryptedData = decryptBinaryData(
+            { cipherText, nonce, senderPublicKey: keyForDecryption },
             mySecretKey,
           );
 
-          if (!decryptedData) {
-            console.warn(
-              "❌ Failed to decrypt voice message - decryptBinaryData returned null",
+          // If decryption failed and this is from me, try with the stored senderPublicKey
+          if (
+            !decryptedData &&
+            isFromMe &&
+            senderPublicKey !== otherUserPublicKey
+          ) {
+            decryptedData = decryptBinaryData(
+              { cipherText, nonce, senderPublicKey },
+              mySecretKey,
             );
-            return;
           }
 
-          console.log(
-            "✅ Voice message decrypted successfully, size:",
-            decryptedData.length,
-          );
+          // If still failed and this is from them, try with otherUserPublicKey
+          if (
+            !decryptedData &&
+            !isFromMe &&
+            otherUserPublicKey &&
+            senderPublicKey !== otherUserPublicKey
+          ) {
+            decryptedData = decryptBinaryData(
+              { cipherText, nonce, senderPublicKey: otherUserPublicKey },
+              mySecretKey,
+            );
+          }
+
+          if (!decryptedData) {
+            setDecryptionFailed(true);
+            return;
+          }
 
           // Convert decrypted data back to base64
           const decryptedBase64 = uint8ArrayToBase64(decryptedData);
@@ -1651,25 +1729,12 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           // Verify the file exists before setting the URL
           const verifyFileInfo = await FileSystem.getInfoAsync(tempFileUri);
           if (verifyFileInfo.exists) {
-            console.log(
-              "✅ Temporary voice file created and verified:",
-              tempFileUri,
-            );
             setDecryptedVoiceUrl(tempFileUri);
           } else {
-            console.error("❌ Failed to create temporary voice file");
+            setDecryptionFailed(true);
           }
         } catch (error) {
-          console.error("❌ Voice message decryption error:", error);
-          console.error("Error details:", {
-            messageId,
-            errorMessage: error.message,
-            hasKeys: {
-              mySecretKey: !!mySecretKey,
-              senderPublicKey: !!senderPublicKey,
-              otherUserPublicKey: !!otherUserPublicKey,
-            },
-          });
+          setDecryptionFailed(true);
         } finally {
           setIsDecrypting(false);
         }
@@ -1679,6 +1744,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     }, [
       isEncryptedVoice,
       decryptedVoiceUrl,
+      decryptionFailed,
       e2eeReady,
       mySecretKey,
       message,
@@ -1699,33 +1765,57 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
     }, [decryptedVoiceUrl, isEncryptedVoice]);
 
     const handlePlayPause = async () => {
+      // Handle decryption failure case
+      if (isEncryptedVoice && decryptionFailed) {
+        Alert.alert(
+          "Decryption Failed",
+          "This voice message could not be decrypted. It may have been sent with incompatible encryption keys.",
+        );
+        return;
+      }
+
       if (voiceUrl) {
         // Verify file exists before trying to play
         if (isEncryptedVoice && decryptedVoiceUrl) {
           try {
             const fileInfo = await FileSystem.getInfoAsync(decryptedVoiceUrl);
             if (!fileInfo.exists) {
-              console.error(
-                "❌ Decrypted voice file not found:",
-                decryptedVoiceUrl,
-              );
               Alert.alert("Error", "Voice file not found. Please try again.");
               return;
             }
           } catch (error) {
-            console.error("❌ Error checking voice file:", error);
             Alert.alert("Error", "Cannot access voice file.");
             return;
           }
         }
 
-        playVoiceMessage(messageId, voiceUrl, duration);
-      } else if (isEncryptedVoice && !decryptedVoiceUrl) {
+        // If this message is currently playing, stop it (show stop button behavior)
+        if (isPlaying) {
+          stopAudioPlayback();
+        } else {
+          playVoiceMessage(messageId, voiceUrl, duration);
+        }
+      } else if (isEncryptedVoice && !decryptedVoiceUrl && !decryptionFailed) {
         Alert.alert(
-          "Error",
-          "Voice message is still being decrypted. Please wait.",
+          "Please Wait",
+          "Voice message is still being decrypted. Please wait a moment.",
         );
       }
+    };
+
+    // Show different UI states based on decryption status
+    const getPlayButtonContent = () => {
+      if (isEncryptedVoice && decryptionFailed) {
+        return <Ionicons name="warning" size={20} color="#FF6B6B" />;
+      }
+
+      return (
+        <Ionicons
+          name={isPlaying ? "stop" : "play"}
+          size={20}
+          color={isSent ? COLORS.textDark : COLORS.primary}
+        />
+      );
     };
 
     return (
@@ -1733,27 +1823,17 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         style={styles.voiceMessageWrapper}
         onPress={handlePlayPause}
         activeOpacity={0.7}
-        disabled={isLoading || !voiceUrl}
+        disabled={isLoading || (!voiceUrl && !decryptionFailed)}
       >
         <View
           style={[
             styles.voicePlayButton,
             isSent && { backgroundColor: "rgba(0, 0, 0, 0.08)" },
             !isSent && { backgroundColor: "rgba(0, 0, 0, 0.05)" },
+            decryptionFailed && { backgroundColor: "rgba(255, 107, 107, 0.1)" },
           ]}
         >
-          {isLoading ? (
-            <ActivityIndicator
-              size="small"
-              color={isSent ? COLORS.textDark : COLORS.primary}
-            />
-          ) : (
-            <Ionicons
-              name={isPlaying ? "pause" : "play"}
-              size={20}
-              color={isSent ? COLORS.textDark : COLORS.primary}
-            />
-          )}
+          {getPlayButtonContent()}
         </View>
 
         <View style={styles.voiceProgressContainer}>
@@ -1763,70 +1843,66 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
               styles.voiceProgressBar,
               isSent && { backgroundColor: "rgba(255, 255, 255, 0.12)" },
               !isSent && { backgroundColor: "rgba(0, 0, 0, 0.02)" },
+              decryptionFailed && {
+                backgroundColor: "rgba(255, 107, 107, 0.1)",
+              },
             ]}
           >
-            {Array.from({ length: 14 }).map((_, index) => {
-              const ratio = (index + 1) / 14;
-              const isActive =
-                ratio <= currentProgress || currentProgress === 0;
-              const heightPattern = 6 + (index % 4) * 4;
-              return (
-                <View
-                  key={index}
-                  style={[
-                    styles.voiceWaveBar,
-                    {
-                      height: heightPattern,
-                      backgroundColor: isSent
-                        ? isActive
-                          ? "rgba(0,0,0,0.9)"
-                          : "rgba(0,0,0,0.35)"
-                        : isActive
-                          ? COLORS.primary
-                          : "rgba(0,0,0,0.12)",
-                    },
-                  ]}
-                />
-              );
-            })}
+            {waveformBars.map((bar) => (
+              <View
+                key={bar.key}
+                style={[
+                  styles.voiceWaveBar,
+                  {
+                    height: bar.height,
+                    backgroundColor: bar.backgroundColor,
+                  },
+                ]}
+              />
+            ))}
           </View>
         </View>
 
-        {/* Show duration in place of lock icon */}
+        {/* Show duration or error status */}
         <View style={{ marginLeft: 8 }}>
           <Text
             style={[
               styles.voiceDurationText,
               isSent && styles.voiceDurationTextSent,
+              decryptionFailed && { color: "#FF6B6B" },
             ]}
           >
-            {duration > 0 ? formatDuration(Math.floor(duration)) : "0:00"}
+            {decryptionFailed
+              ? "Error"
+              : duration > 0
+                ? formatDuration(Math.floor(duration))
+                : "0:00"}
           </Text>
         </View>
       </TouchableOpacity>
     );
-  };
+  });
 
-  const RecordingWaveform = ({ isActive, seed }) => {
-    const bars = 20;
+  const RecordingWaveform = memo(({ isActive, seed }) => {
+    const bars = 16; // Reduced from 20 to 16 for better performance
     const animatedValues = useRef(
       Array.from({ length: bars }).map(() => new Animated.Value(0.4)),
     ).current;
 
     useEffect(() => {
       const animations = animatedValues.map((val, index) => {
-        const delay = (index * 60 + (seed % 100)) % 800;
+        const delay = (index * 80 + (seed % 100)) % 600; // Reduced complexity
         return Animated.loop(
           Animated.sequence([
             Animated.timing(val, {
               toValue: 1,
-              duration: 280,
+              duration: 300, // Slightly longer duration for smoother animation
               delay,
               useNativeDriver: true,
             }),
             Animated.timing(val, {
               toValue: 0.3,
-              duration: 280,
+              duration: 300,
               useNativeDriver: true,
             }),
           ]),
@@ -1868,7 +1944,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
         })}
       </View>
     );
-  };
+  });
 
   const renderMessage = ({ item }) => {
     const isSent =
