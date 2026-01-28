@@ -18,6 +18,9 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "GOOGLE_SERVICES_JSON": "{\"project_info\":{\"project_number\":\"587715486845\",\"project_id\":\"your-meme-s\",\"storage_bucket\":\"your-meme-s.firebasestorage.app\"},\"client\":[{\"client_info\":{\"mobilesdk_app_id\":\"1:587715486845:android:ff7f0ffbbfad2f45d43d14\",\"android_client_info\":{\"package_name\":\"com.yourmemes.app\"}},\"oauth_client\":[],\"api_key\":[{\"current_key\":\"AIzaSyCcn8DU7yMvdE9wox7XJZnUOfOR2OGgLic\"}],\"services\":{\"appinvite_service\":{\"other_platform_oauth_client\":[]}}}],\"configuration_version\":\"1\"}"
+      },
       "android": {
         "buildType": "apk",
         "gradleCommand": ":app:assembleRelease --quiet",
