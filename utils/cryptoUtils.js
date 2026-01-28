@@ -267,3 +267,128 @@ export const verifySignature = (message, signatureBase64, publicKeyBase64) => {
     return false;
   }
 };
+
+/**
+ * Encrypt binary data using nacl.box (asymmetric encryption)
+ * Returns: { cipherText, nonce }
+ */
+export const encryptBinaryData = (binaryData, senderPrivateKey, receiverPublicKey) => {
+  try {
+    if (!binaryData || !senderPrivateKey || !receiverPublicKey) {
+      throw new Error("Missing encryption parameters");
+    }
+
+    // Convert binary data to Uint8Array if it's not already
+    let dataUint8;
+    if (binaryData instanceof Uint8Array) {
+      dataUint8 = binaryData;
+    } else if (binaryData instanceof ArrayBuffer) {
+      dataUint8 = new Uint8Array(binaryData);
+    } else if (typeof binaryData === 'string') {
+      // Assume base64 encoded binary data
+      dataUint8 = base64ToUint8Array(binaryData);
+    } else {
+      throw new Error("Unsupported binary data format");
+    }
+
+    const receiverPublicKeyUint8 = base64ToUint8Array(receiverPublicKey);
+    const senderPrivateKeyUint8 = base64ToUint8Array(senderPrivateKey);
+    const nonce = nacl.randomBytes(nacl.box.nonceLength);
+
+    // Validate key lengths
+    if (receiverPublicKeyUint8.length !== nacl.box.publicKeyLength) {
+      throw new Error(
+        `Invalid receiver public key length: ${receiverPublicKeyUint8.length}, expected ${nacl.box.publicKeyLength}`,
+      );
+    }
+    if (senderPrivateKeyUint8.length !== nacl.box.secretKeyLength) {
+      throw new Error(
+        `Invalid sender private key length: ${senderPrivateKeyUint8.length}, expected ${nacl.box.secretKeyLength}`,
+      );
+    }
+
+    // Encrypt binary data using nacl.box
+    const cipherText = nacl.box(
+      dataUint8,
+      nonce,
+      receiverPublicKeyUint8,
+      senderPrivateKeyUint8,
+    );
+
+    if (!cipherText) {
+      throw new Error("Binary data encryption failed");
+    }
+
+    return {
+      cipherText: uint8ArrayToBase64(cipherText),
+      nonce: uint8ArrayToBase64(nonce),
+    };
+  } catch (error) {
+    console.error("❌ Binary data encryption error:", error.message || error);
+    throw error;
+  }
+};
+
+/**
+ * Decrypt binary data using nacl.box.open (asymmetric decryption)
+ * Returns: decrypted binary data as Uint8Array or null if decryption fails
+ */
+export const decryptBinaryData = (encryptedData, receiverPrivateKey) => {
+  try {
+    if (!encryptedData || !receiverPrivateKey) {
+      console.warn("❌ Binary decryption failed - missing encryptedData or receiverPrivateKey");
+      return null;
+    }
+
+    const { cipherText, nonce, senderPublicKey } = encryptedData;
+    if (!cipherText || !nonce || !senderPublicKey) {
+      console.warn(
+        "❌ Binary decryption failed - missing cipherText, nonce, or senderPublicKey",
+      );
+      return null;
+    }
+
+    const cipherTextUint8 = base64ToUint8Array(cipherText);
+    const nonceUint8 = base64ToUint8Array(nonce);
+    const senderPublicKeyUint8 = base64ToUint8Array(senderPublicKey);
+    const receiverPrivateKeyUint8 = base64ToUint8Array(receiverPrivateKey);
+
+    // Validate key and nonce lengths
+    if (senderPublicKeyUint8.length !== nacl.box.publicKeyLength) {
+      console.warn(
+        `❌ Invalid sender public key length: ${senderPublicKeyUint8.length}, expected ${nacl.box.publicKeyLength}`,
+      );
+      return null;
+    }
+    if (receiverPrivateKeyUint8.length !== nacl.box.secretKeyLength) {
+      console.warn(
+        `❌ Invalid receiver private key length: ${receiverPrivateKeyUint8.length}, expected ${nacl.box.secretKeyLength}`,
+      );
+      return null;
+    }
+    if (nonceUint8.length !== nacl.box.nonceLength) {
+      console.warn(
+        `❌ Invalid nonce length: ${nonceUint8.length}, expected ${nacl.box.nonceLength}`,
+      );
+      return null;
+    }
+
+    // Decrypt binary data using nacl.box.open
+    const decrypted = nacl.box.open(
+      cipherTextUint8,
+      nonceUint8,
+      senderPublicKeyUint8,
+      receiverPrivateKeyUint8,
+    );
+
+    if (!decrypted) {
+      console.warn("❌ Binary data decryption failed - keys may not match");
+      return null;
+    }
+
+    return decrypted;
+  } catch (error) {
+    console.warn("❌ Binary decryption error:", error.message);
+    return null;
+  }
+};

@@ -17,14 +17,20 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { Audio } from "expo-av";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import { useAuthStore } from "../store/authStore";
 import { API_URL } from "../constants/api";
 import COLORS from "../constants/colors";
 import styles from "../assets/styles/chatModal.styles";
 import { scheduleLocalNotification } from "../utils/notifications";
 import { formatLastSeen } from "../utils/dateUtils";
-import { encryptMessage, decryptMessage } from "../utils/cryptoUtils";
+import {
+  encryptMessage,
+  decryptMessage,
+  encryptBinaryData,
+  decryptBinaryData,
+  uint8ArrayToBase64,
+} from "../utils/cryptoUtils";
 import useKeyStorage from "../hooks/useKeyStorage";
 import { useRecipientPublicKeyStore } from "../store/recipientPublicKeyStore";
 import {
@@ -623,11 +629,19 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       if (isFromOtherUser && !visible) {
         const senderName =
           typeof msg.sender === "object" ? msg.sender.username : "Someone";
-        const notificationBody = msg.isEncrypted
-          ? "🔒 Encrypted message"
-          : messageToAdd.text?.length > 80
-            ? messageToAdd.text.slice(0, 77) + "…"
-            : messageToAdd.text || "New message";
+        let notificationBody;
+        if (msg.isEncrypted && msg.encryptedVoiceMessage) {
+          notificationBody = "🔒🎤 Encrypted voice message";
+        } else if (msg.isEncrypted) {
+          notificationBody = "🔒 Encrypted message";
+        } else if (msg.voiceMessage) {
+          notificationBody = "🎤 Voice message";
+        } else {
+          notificationBody =
+            messageToAdd.text?.length > 80
+              ? messageToAdd.text.slice(0, 77) + "…"
+              : messageToAdd.text || "New message";
+        }
         scheduleLocalNotification(senderName, notificationBody, {
           type: "message",
           senderId: String(senderId),
@@ -1161,37 +1175,147 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       }, 50);
     };
 
+    // STEP 1: Validate sender's own keys
+    if (!keysInitialized || !mySecretKey || !myPublicKey) {
+      Alert.alert(
+        "Error",
+        "E2EE keys not initialized. Please close and reopen chat.",
+      );
+      return;
+    }
+
+    // STEP 2: Fetch recipient's public key if not cached
+    let recipientKey = otherUserPublicKey;
+
+    if (!recipientKey) {
+      // Force refresh the key (bypass cache)
+      const keyFetched = await fetchRecipientPublicKey(true);
+      if (keyFetched) {
+        try {
+          const freshKey = await fetchFromStore(otherUser._id, token);
+          recipientKey = freshKey;
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        // DO NOT SEND UNENCRYPTED - BLOCK THE MESSAGE
+        Alert.alert(
+          "❌ Encryption Not Available",
+          "This user hasn't set up end-to-end encryption yet. You cannot send voice messages until they enable E2EE.\n\nAsk them to open the app to set up encryption.",
+        );
+        return;
+      }
+    }
+
+    if (!recipientKey) {
+      Alert.alert(
+        "❌ Encryption Not Available",
+        "Unable to send voice message - recipient encryption key not available.",
+      );
+      return;
+    }
+
     try {
       setIsSendingVoice(true);
-      // Upload voice file to server
-      const formData = new FormData();
-      const voiceFile = {
-        uri: uri,
-        type: "audio/m4a",
-        name: `voice-${Date.now()}.m4a`,
-      };
-      formData.append("voice", voiceFile);
-      formData.append("receiverId", otherUser._id);
-      formData.append("duration", duration.toString());
 
-      const res = await fetch(`${API_URL}/messages/voice`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
+      // STEP 3: Read the voice file as binary data
+      const voiceFileData = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
       });
 
-      const data = await res.json();
-      if (res.ok && data.message) {
-        addMessage(data.message);
+      // STEP 4: Encrypt the voice data
+      console.log("🔐 Encrypting voice message:", {
+        voiceDataSize: voiceFileData.length,
+        hasMySecretKey: !!mySecretKey,
+        hasRecipientKey: !!recipientKey,
+        myPublicKey: myPublicKey?.substring(0, 10) + "...",
+        recipientKey: recipientKey?.substring(0, 10) + "...",
+      });
+
+      const { cipherText, nonce } = encryptBinaryData(
+        voiceFileData,
+        mySecretKey,
+        recipientKey,
+      );
+
+      console.log("✅ Voice message encrypted:", {
+        cipherTextSize: cipherText.length,
+        nonceSize: nonce.length,
+      });
+
+      // STEP 5: Send encrypted voice message
+      const messagePayload = {
+        receiverId: otherUser._id,
+        encryptedVoiceMessage: {
+          cipherText,
+          nonce,
+          senderPublicKey: myPublicKey,
+          duration: duration ? parseInt(duration, 10) : 0,
+        },
+        isEncrypted: true,
+        senderId: currentUserId,
+      };
+
+      // Play send sound
+      playSendSound();
+
+      // Send via socket with API fallback
+      if (socket?.emit) {
+        socket.emit(
+          "send_encrypted_voice_message",
+          messagePayload,
+          (err, saved) => {
+            if (!err && saved) {
+              // Add the message to local state (it will be decrypted when displayed)
+              addMessage(saved);
+            } else if (err) {
+              // Only fallback to API for network issues, not for E2EE errors
+              if (
+                err.message &&
+                (err.message.includes("E2EE") ||
+                  err.message.includes("PLAINTEXT") ||
+                  err.message.includes("Encryption") ||
+                  err.message.includes("cannot send"))
+              ) {
+                // Critical E2EE error - do not retry
+                Alert.alert("Error", err.message);
+              } else {
+                // Network error - try API
+                sendViaApi();
+              }
+            }
+          },
+        );
       } else {
-        // Show error message - especially for blocking-related errors
-        const errorMsg = data.message || "Failed to send voice message";
-        Alert.alert("Error", errorMsg);
+        sendViaApi();
+      }
+
+      async function sendViaApi() {
+        try {
+          const res = await fetch(`${API_URL}/messages/encrypted-voice`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(messagePayload),
+          });
+
+          const data = await res.json();
+          if (res.ok && data.message) {
+            addMessage(data.message);
+          } else {
+            // Show error message - especially for blocking-related errors
+            const errorMsg = data.message || "Failed to send voice message";
+            Alert.alert("Error", errorMsg);
+          }
+        } catch (error) {
+          Alert.alert("Error", "Network error: " + error.message);
+        }
       }
     } catch (err) {
-      Alert.alert("Error", "Failed to send voice message");
+      console.error("Voice message encryption error:", err);
+      Alert.alert("Error", "Failed to encrypt voice message: " + err.message);
     } finally {
       setIsSendingVoice(false);
     }
@@ -1396,15 +1520,211 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
 
   const VoiceMessagePlayer = ({ message, isSent }) => {
     const messageId = message._id;
-    const voiceUrl = message.voiceMessage?.url;
-    const duration = message.voiceMessage?.duration || 0;
+    const [decryptedVoiceUrl, setDecryptedVoiceUrl] = useState(null);
+    const [isDecrypting, setIsDecrypting] = useState(false);
+    const decryptionRef = useRef(false);
+
+    // Handle both encrypted and unencrypted voice messages
+    const isEncryptedVoice =
+      message.isEncrypted && message.encryptedVoiceMessage;
+    const voiceUrl = isEncryptedVoice
+      ? decryptedVoiceUrl
+      : message.voiceMessage?.url;
+    const duration = isEncryptedVoice
+      ? message.encryptedVoiceMessage?.duration || 0
+      : message.voiceMessage?.duration || 0;
+
     const isPlaying = playingMessageId === messageId;
     const currentProgress = isPlaying ? playbackProgress : 0;
-    const isLoading = isLoadingAudio && playingMessageId === messageId;
+    const isLoading =
+      (isLoadingAudio && playingMessageId === messageId) || isDecrypting;
 
-    const handlePlayPause = () => {
+    // Decrypt voice message when component mounts or when keys become available
+    useEffect(() => {
+      const decryptVoiceMessage = async () => {
+        if (
+          !isEncryptedVoice ||
+          decryptedVoiceUrl ||
+          !e2eeReady ||
+          !mySecretKey ||
+          decryptionRef.current
+        ) {
+          return;
+        }
+
+        const { cipherText, nonce, senderPublicKey } =
+          message.encryptedVoiceMessage;
+        if (!cipherText || !nonce || !senderPublicKey) {
+          console.warn("❌ Missing encrypted voice message data");
+          return;
+        }
+
+        try {
+          decryptionRef.current = true;
+          setIsDecrypting(true);
+
+          console.log("🔓 Attempting to decrypt voice message:", {
+            messageId,
+            hasCipherText: !!cipherText,
+            hasNonce: !!nonce,
+            hasSenderPublicKey: !!senderPublicKey,
+            hasMySecretKey: !!mySecretKey,
+            senderPublicKeyPreview: senderPublicKey?.substring(0, 10) + "...",
+            mySecretKeyPreview: mySecretKey?.substring(0, 10) + "...",
+          });
+
+          // For voice messages, we need to determine the correct sender public key
+          // If this is a message I sent, the senderPublicKey should be my public key
+          // If this is a message from the other user, the senderPublicKey should be their public key
+          const senderId =
+            typeof message.sender === "object"
+              ? message.sender._id
+              : message.sender;
+          const isFromMe = senderId === currentUserId;
+
+          let actualSenderPublicKey = senderPublicKey;
+
+          // If the message is from me, I need to use the recipient's public key for decryption
+          // If the message is from them, I need to use their public key for decryption
+          if (isFromMe) {
+            // Message from me: I encrypted it with my secret key + their public key
+            // To decrypt: I need my secret key + their public key
+            actualSenderPublicKey = otherUserPublicKey;
+            console.log(
+              "🔓 Decrypting my own voice message, using recipient's public key",
+            );
+          } else {
+            // Message from them: They encrypted it with their secret key + my public key
+            // To decrypt: I need my secret key + their public key
+            actualSenderPublicKey = senderPublicKey;
+            console.log(
+              "🔓 Decrypting their voice message, using sender's public key",
+            );
+          }
+
+          if (!actualSenderPublicKey) {
+            console.warn("❌ Cannot decrypt - missing sender public key");
+            return;
+          }
+
+          // Use fixed filename per messageId to avoid mismatches
+          const tempFileName = `voice_${messageId}.m4a`;
+          const tempFileUri = `${FileSystem.documentDirectory}${tempFileName}`;
+
+          // Check if file already exists before decrypting
+          const fileInfo = await FileSystem.getInfoAsync(tempFileUri);
+          if (fileInfo.exists) {
+            console.log(
+              "✅ Voice file already exists, using cached file:",
+              tempFileUri,
+            );
+            setDecryptedVoiceUrl(tempFileUri);
+            return;
+          }
+
+          // Decrypt the voice data
+          const decryptedData = decryptBinaryData(
+            { cipherText, nonce, senderPublicKey: actualSenderPublicKey },
+            mySecretKey,
+          );
+
+          if (!decryptedData) {
+            console.warn(
+              "❌ Failed to decrypt voice message - decryptBinaryData returned null",
+            );
+            return;
+          }
+
+          console.log(
+            "✅ Voice message decrypted successfully, size:",
+            decryptedData.length,
+          );
+
+          // Convert decrypted data back to base64
+          const decryptedBase64 = uint8ArrayToBase64(decryptedData);
+
+          // Ensure the file is written successfully
+          await FileSystem.writeAsStringAsync(tempFileUri, decryptedBase64, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+
+          // Verify the file exists before setting the URL
+          const verifyFileInfo = await FileSystem.getInfoAsync(tempFileUri);
+          if (verifyFileInfo.exists) {
+            console.log(
+              "✅ Temporary voice file created and verified:",
+              tempFileUri,
+            );
+            setDecryptedVoiceUrl(tempFileUri);
+          } else {
+            console.error("❌ Failed to create temporary voice file");
+          }
+        } catch (error) {
+          console.error("❌ Voice message decryption error:", error);
+          console.error("Error details:", {
+            messageId,
+            errorMessage: error.message,
+            hasKeys: {
+              mySecretKey: !!mySecretKey,
+              senderPublicKey: !!senderPublicKey,
+              otherUserPublicKey: !!otherUserPublicKey,
+            },
+          });
+        } finally {
+          setIsDecrypting(false);
+        }
+      };
+
+      decryptVoiceMessage();
+    }, [
+      isEncryptedVoice,
+      decryptedVoiceUrl,
+      e2eeReady,
+      mySecretKey,
+      message,
+      messageId,
+      currentUserId,
+      otherUserPublicKey,
+    ]);
+
+    // Cleanup temporary file when component unmounts
+    useEffect(() => {
+      return () => {
+        if (decryptedVoiceUrl && isEncryptedVoice) {
+          FileSystem.deleteAsync(decryptedVoiceUrl, { idempotent: true }).catch(
+            () => {},
+          );
+        }
+      };
+    }, [decryptedVoiceUrl, isEncryptedVoice]);
+
+    const handlePlayPause = async () => {
       if (voiceUrl) {
+        // Verify file exists before trying to play
+        if (isEncryptedVoice && decryptedVoiceUrl) {
+          try {
+            const fileInfo = await FileSystem.getInfoAsync(decryptedVoiceUrl);
+            if (!fileInfo.exists) {
+              console.error(
+                "❌ Decrypted voice file not found:",
+                decryptedVoiceUrl,
+              );
+              Alert.alert("Error", "Voice file not found. Please try again.");
+              return;
+            }
+          } catch (error) {
+            console.error("❌ Error checking voice file:", error);
+            Alert.alert("Error", "Cannot access voice file.");
+            return;
+          }
+        }
+
         playVoiceMessage(messageId, voiceUrl, duration);
+      } else if (isEncryptedVoice && !decryptedVoiceUrl) {
+        Alert.alert(
+          "Error",
+          "Voice message is still being decrypted. Please wait.",
+        );
       }
     };
 
@@ -1470,8 +1790,10 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
               );
             })}
           </View>
+        </View>
 
-          {/* Duration text */}
+        {/* Show duration in place of lock icon */}
+        <View style={{ marginLeft: 8 }}>
           <Text
             style={[
               styles.voiceDurationText,
@@ -1553,7 +1875,9 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
       (typeof item.sender === "object" ? item.sender._id : item.sender) ===
       currentUserId;
     const read = !!item.read;
-    const isVoiceMessage = !!item.voiceMessage;
+    const isVoiceMessage =
+      !!item.voiceMessage ||
+      (!!item.isEncrypted && !!item.encryptedVoiceMessage);
 
     // ✅ Handle encrypted messages gracefully:
     // - If we have decrypted text, show it
@@ -1786,9 +2110,9 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                 />
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.headerName}>{otherUser.username} 🔒</Text>
+                <Text style={styles.headerName}>{otherUser.username}</Text>
                 <Text style={styles.lastSeenText}>
-                  Messages are end-to-end encrypted
+                  {formatLastSeen(lastSeen, isOnline)}
                 </Text>
               </View>
             </View>
@@ -1871,9 +2195,9 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
               )}
             </View>
             <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.headerName}>{otherUser.username} 🔒</Text>
+              <Text style={styles.headerName}>{otherUser.username}</Text>
               <Text style={styles.lastSeenText}>
-                Messages are end-to-end encrypted
+                {formatLastSeen(lastSeen, isOnline)}
               </Text>
             </View>
           </TouchableOpacity>
@@ -2007,10 +2331,16 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
                 isActive={isRecording && !isRecordingPaused}
                 seed={recordingWaveSeed}
               />
-              <Text style={styles.recordingText}>
-                {isRecordingPaused ? "Paused" : "Recording"}{" "}
-                {formatDuration(recordingDuration)}
-              </Text>
+              <View style={{ marginLeft: 12, flex: 1 }}>
+                <Text style={styles.recordingText}>
+                  {isRecordingPaused ? "Paused" : "Recording"}
+                </Text>
+                <Text
+                  style={[styles.recordingText, { fontSize: 14, opacity: 0.9 }]}
+                >
+                  {formatDuration(recordingDuration)}
+                </Text>
+              </View>
             </View>
             <TouchableOpacity
               style={styles.pauseResumeRecordingButton}
