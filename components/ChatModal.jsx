@@ -628,7 +628,7 @@ export default function ChatModal({ visible, otherUser, onClose, socket }) {
           typeof msg.sender === "object" ? msg.sender.username : "Someone";
         let notificationBody;
         if (msg.isEncrypted && msg.encryptedVoiceMessage) {
-          notificationBody = "🔒🎤 Encrypted voice message";
+          notificationBody = "🎤 Voice message";
         } else if (msg.isEncrypted) {
           notificationBody = "🔒 Encrypted message";
         } else if (msg.voiceMessage) {
